@@ -4,7 +4,6 @@ import me.maxim.invisauc.gui.TradeConfigScreen;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.option.KeyBinding;
@@ -16,30 +15,31 @@ import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Objects;
+import java.util.Random;
 
 public class InvisAuc implements ModInitializer {
     private static KeyBinding startKey, guiKey;
     private static boolean enabled = false;
     private static int timer = 0, currentBatch = 0, state = 0;
+    private static final Random random = new Random();
 
-    private static final String PREFIX = "§8[§bInvisAuc§8]§r ";
+    private static final String PREFIX = "§8[§bIA§8]§r ";
     private static int currentPrice = 39000;
     private static int maxItems = 6;
-    private static int waitTimeTicks = 300;
     private static ItemStack targetStack = ItemStack.EMPTY;
 
     public static void setCurrentPrice(int price) { currentPrice = price; }
     public static int getCurrentPrice() { return currentPrice; }
     public static void setMaxItems(int count) { maxItems = count; }
     public static int getMaxItems() { return maxItems; }
-    public static void setWaitTime(int seconds) { waitTimeTicks = seconds * 20; }
-    public static int getWaitTimeSeconds() { return waitTimeTicks / 20; }
+    public static void setWaitTime(int seconds) { /* Тепер ігноруємо, бо швидкість фіксована */ }
+    public static int getWaitTimeSeconds() { return 1; }
     public static ItemStack getTargetStack() { return targetStack; }
 
     public static void setTargetStack(ItemStack stack) {
         if (stack != null && !stack.isEmpty()) {
             targetStack = stack.copy();
-            sendMessage("§aРежим конвеєра активовано.");
+            sendMessage("§aSET");
         }
     }
 
@@ -48,13 +48,12 @@ public class InvisAuc implements ModInitializer {
         startKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.start", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_O, "InvisAuc"));
         guiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.gui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_P, "InvisAuc"));
 
-        // Чат нам більше не потрібен для логіки, бо ми не чекаємо "Sold"
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             while (startKey.wasPressed()) {
                 enabled = !enabled;
                 state = 0; timer = 0; currentBatch = 0;
-                sendMessage(enabled ? "§aКОНВЕЄР ЗАПУЩЕНО" : "§cКОНВЕЄР ЗУПИНЕНО");
+                sendMessage(enabled ? "§aON" : "§cOFF");
             }
             while (guiKey.wasPressed()) client.setScreen(new TradeConfigScreen());
             if (enabled) onTick(client);
@@ -66,59 +65,55 @@ public class InvisAuc implements ModInitializer {
         if (timer > 0) { timer--; return; }
 
         switch (state) {
-            case 0 -> { // КРОК 1: ВИСТАВИТИ 6 ШТУК
+            case 0 -> {
                 if (currentBatch >= maxItems) {
-                    // Виставили 6 — скидаємо лічильник і йдемо в AH
                     currentBatch = 0;
                     client.getNetworkHandler().sendChatCommand("ah");
-                    state = 10; timer = 40;
+                    state = 10; timer = 10;
                     return;
                 }
-
                 int slot = findTargetItemSlot(client);
                 if (slot != -1) {
                     client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, slot < 9 ? slot + 36 : slot, 0, SlotActionType.PICKUP, client.player);
-                    state = 1; timer = 12;
+                    state = 1; timer = 6;
                 } else {
-                    // Якщо раптом зілля закінчились раніше ніж 6 — все одно в AH
                     client.getNetworkHandler().sendChatCommand("ah");
-                    state = 10; timer = 40;
+                    state = 10; timer = 10;
                 }
             }
-            case 1 -> { // ПКМ (взяти 1 шт)
+            case 1 -> {
                 client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, 36, 1, SlotActionType.PICKUP, client.player);
-                state = 2; timer = 12;
+                state = 2; timer = 6;
             }
-            case 2 -> { // Повернення решти
+            case 2 -> {
                 int empty = client.player.getInventory().getEmptySlot();
-                client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, (empty != -1 ? (empty < 9 ? empty + 36 : empty) : 9), 0, SlotActionType.PICKUP, client.player);
-                state = 3; timer = 12;
+                int target = (empty != -1 ? (empty < 9 ? empty + 36 : empty) : 9);
+                client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, target, 0, SlotActionType.PICKUP, client.player);
+                state = 3; timer = 6;
             }
-            case 3 -> { // Продаж
+            case 3 -> {
                 client.player.getInventory().selectedSlot = 0;
                 client.getNetworkHandler().sendChatCommand("ah sell " + currentPrice);
-                currentBatch++; // Рахуємо скільки виставили в цій ітерації
-                state = 0; timer = 35;
+                currentBatch++;
+                state = 0;
+                timer = 20 + random.nextInt(6);
             }
-            case 10 -> { // КРОК 2: ВХІД У СХОВИЩЕ
+            case 10 -> {
                 if (client.currentScreen instanceof GenericContainerScreen container) {
                     client.interactionManager.clickSlot(container.getScreenHandler().syncId, 46, 0, SlotActionType.PICKUP, client.player);
-                    state = 11; timer = 40;
+                    state = 11; timer = 10;
                 } else if (timer == 0) state = 0;
             }
-            case 11 -> { // КРОК 3: ЗАБРАТИ ВСЕ
+            case 11 -> {
                 if (client.currentScreen instanceof GenericContainerScreen container) {
                     int slot = findInMenu(container);
                     int invStart = container.getScreenHandler().slots.size() - 36;
-
-                    // Забираємо поки є місце в інвентарі і є зілля в меню
                     if (slot != -1 && slot < invStart && client.player.getInventory().getEmptySlot() != -1) {
                         client.interactionManager.clickSlot(container.getScreenHandler().syncId, slot, 0, SlotActionType.QUICK_MOVE, client.player);
-                        timer = 12;
+                        timer = 5;
                     } else {
-                        // КРОК 4: ПОВТОРИТИ (закриваємо і йдемо на нове коло)
                         client.player.closeHandledScreen();
-                        state = 0; timer = 50;
+                        state = 0; timer = 12;
                     }
                 } else { state = 0; }
             }
