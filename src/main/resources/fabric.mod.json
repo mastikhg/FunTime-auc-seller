@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "invis-potion-auto-auc",
+  "version": "1.0.0",
+  "name": "Invis Potion Auto Auc",
+  "description": "Автоматизація аукціону",
+  "authors": ["Maxim"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "me.maxim.invisauc.InvisAuc"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "minecraft": "1.21.1"
+  }
+}
