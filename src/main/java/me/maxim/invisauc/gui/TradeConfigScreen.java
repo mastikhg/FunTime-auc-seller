@@ -7,7 +7,6 @@ import io.wispforest.owo.ui.container.FlowLayout;
 import io.wispforest.owo.ui.core.*;
 import me.maxim.invisauc.InvisAuc;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import org.jetbrains.annotations.NotNull;
 
@@ -38,11 +37,11 @@ public class TradeConfigScreen extends BaseOwoScreen<FlowLayout> {
             if (client.player != null && !client.player.getMainHandStack().isEmpty()) {
                 InvisAuc.setTargetStack(client.player.getMainHandStack().copy());
                 itemShowcase.stack(InvisAuc.getTargetStack());
-                client.player.sendMessage(Text.literal("§b[InvisAuc] §aItem updated!"), false);
+                client.player.sendMessage(Text.literal("§b[IA] §aItem updated!"), false);
             }
         }).margins(Insets.bottom(12)).horizontalSizing(Sizing.fill(85)));
 
-        // Price
+        // Sell Price
         window.child(Components.label(Text.of("Sell Price:")));
         var priceField = Components.textBox(Sizing.fill(90));
         priceField.setText(String.valueOf(InvisAuc.getCurrentPrice()));
@@ -51,7 +50,16 @@ public class TradeConfigScreen extends BaseOwoScreen<FlowLayout> {
         });
         window.child(priceField.margins(Insets.bottom(10)));
 
-        // Max Slots
+        // Sell Amount
+        window.child(Components.label(Text.of("Sell Amount (1 or 64):")));
+        var amountField = Components.textBox(Sizing.fill(90));
+        amountField.setText(String.valueOf(InvisAuc.getSellAmount()));
+        amountField.onChanged().subscribe(val -> {
+            try { if (!val.isEmpty()) InvisAuc.setSellAmount(Integer.parseInt(val.trim())); } catch (NumberFormatException ignored) {}
+        });
+        window.child(amountField.margins(Insets.bottom(10)));
+
+        // Max AH Slots
         window.child(Components.label(Text.of("Max AH Slots:")));
         var limitField = Components.textBox(Sizing.fill(90));
         limitField.setText(String.valueOf(InvisAuc.getMaxItems()));
@@ -59,15 +67,6 @@ public class TradeConfigScreen extends BaseOwoScreen<FlowLayout> {
             try { if (!val.isEmpty()) InvisAuc.setMaxItems(Integer.parseInt(val.trim())); } catch (NumberFormatException ignored) {}
         });
         window.child(limitField.margins(Insets.bottom(10)));
-
-        // Re-check Timer
-        window.child(Components.label(Text.of("Wait Timer (sec):")));
-        var timeField = Components.textBox(Sizing.fill(90));
-        timeField.setText(String.valueOf(InvisAuc.getWaitTimeSeconds()));
-        timeField.onChanged().subscribe(val -> {
-            try { if (!val.isEmpty()) InvisAuc.setWaitTime(Integer.parseInt(val.trim())); } catch (NumberFormatException ignored) {}
-        });
-        window.child(timeField);
 
         rootComponent.child(window);
     }

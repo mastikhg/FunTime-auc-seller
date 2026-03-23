@@ -21,20 +21,25 @@ public class InvisAuc implements ModInitializer {
     private static KeyBinding startKey, guiKey;
     private static boolean enabled = false;
     private static int timer = 0, currentBatch = 0, state = 0;
+    private static int clickCounter = 0; // Лічильник для кліків (відрахування кількості)
     private static final Random random = new Random();
 
     private static final String PREFIX = "§8[§bIA§8]§r ";
     private static int currentPrice = 39000;
     private static int maxItems = 6;
+    private static int sellAmount = 1;
     private static ItemStack targetStack = ItemStack.EMPTY;
 
+    // API для GUI
     public static void setCurrentPrice(int price) { currentPrice = price; }
     public static int getCurrentPrice() { return currentPrice; }
     public static void setMaxItems(int count) { maxItems = count; }
     public static int getMaxItems() { return maxItems; }
-    public static void setWaitTime(int seconds) { /* Тепер ігноруємо, бо швидкість фіксована */ }
-    public static int getWaitTimeSeconds() { return 1; }
+    public static void setSellAmount(int amount) { sellAmount = amount; }
+    public static int getSellAmount() { return sellAmount; }
     public static ItemStack getTargetStack() { return targetStack; }
+    public static void setWaitTime(int ignored) {}
+    public static int getWaitTimeSeconds() { return 1; }
 
     public static void setTargetStack(ItemStack stack) {
         if (stack != null && !stack.isEmpty()) {
@@ -61,11 +66,11 @@ public class InvisAuc implements ModInitializer {
     }
 
     private void onTick(MinecraftClient client) {
-        if (client.player == null || client.interactionManager == null) return;
+        if (client.player == null || client.interactionManager == null || client.getNetworkHandler() == null) return;
         if (timer > 0) { timer--; return; }
 
         switch (state) {
-            case 0 -> {
+            case 0 -> { // ВЗЯТИ СТАК
                 if (currentBatch >= maxItems) {
                     currentBatch = 0;
                     client.getNetworkHandler().sendChatCommand("ah");
@@ -75,52 +80,63 @@ public class InvisAuc implements ModInitializer {
                 int slot = findTargetItemSlot(client);
                 if (slot != -1) {
                     client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, slot < 9 ? slot + 36 : slot, 0, SlotActionType.PICKUP, client.player);
-                    state = 1; timer = 6;
+                    state = 1; timer = 5;
+                    clickCounter = 0; // Скидаємо лічильник
                 } else {
                     client.getNetworkHandler().sendChatCommand("ah");
                     state = 10; timer = 10;
                 }
             }
-            case 1 -> {
-                client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, 36, 1, SlotActionType.PICKUP, client.player);
-                state = 2; timer = 6;
+            case 1 -> { // ВІДРАХУВАННЯ (ПКМ)
+                if (clickCounter < sellAmount) {
+                    // Кладемо 1 штуку правим кліком (button 1)
+                    client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, 36, 1, SlotActionType.PICKUP, client.player);
+                    clickCounter++;
+                    timer = 2; // Дуже швидкий клік для відрахування (0.1 сек)
+                } else {
+                    state = 2; timer = 5; // Закінчили відраховувати
+                }
             }
-            case 2 -> {
+            case 2 -> { // ПОВЕРНУТИ ЗАЛИШОК
                 int empty = client.player.getInventory().getEmptySlot();
                 int target = (empty != -1 ? (empty < 9 ? empty + 36 : empty) : 9);
                 client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, target, 0, SlotActionType.PICKUP, client.player);
                 state = 3; timer = 6;
             }
-            case 3 -> {
+            case 3 -> { // ПРОДАЖ
                 client.player.getInventory().selectedSlot = 0;
                 client.getNetworkHandler().sendChatCommand("ah sell " + currentPrice);
                 currentBatch++;
                 state = 0;
-                timer = 20 + random.nextInt(6);
+                timer = 22 + random.nextInt(6);
             }
-            case 10 -> {
-                if (client.currentScreen instanceof GenericContainerScreen container) {
-                    client.interactionManager.clickSlot(container.getScreenHandler().syncId, 46, 0, SlotActionType.PICKUP, client.player);
-                    state = 11; timer = 10;
-                } else if (timer == 0) state = 0;
-            }
-            case 11 -> {
-                if (client.currentScreen instanceof GenericContainerScreen container) {
-                    int slot = findInMenu(container);
-                    int invStart = container.getScreenHandler().slots.size() - 36;
-                    if (slot != -1 && slot < invStart && client.player.getInventory().getEmptySlot() != -1) {
-                        client.interactionManager.clickSlot(container.getScreenHandler().syncId, slot, 0, SlotActionType.QUICK_MOVE, client.player);
-                        timer = 5;
-                    } else {
-                        client.player.closeHandledScreen();
-                        state = 0; timer = 12;
-                    }
-                } else { state = 0; }
-            }
+            case 10, 11 -> handleStorage(client);
+        }
+    }
+
+    private void handleStorage(MinecraftClient client) {
+        if (state == 10) {
+            if (client.currentScreen instanceof GenericContainerScreen container) {
+                client.interactionManager.clickSlot(container.getScreenHandler().syncId, 46, 0, SlotActionType.PICKUP, client.player);
+                state = 11; timer = 10;
+            } else if (timer == 0) state = 0;
+        } else {
+            if (client.currentScreen instanceof GenericContainerScreen container) {
+                int slot = findInMenu(container);
+                int invStart = container.getScreenHandler().slots.size() - 36;
+                if (slot != -1 && slot < invStart && client.player.getInventory().getEmptySlot() != -1) {
+                    client.interactionManager.clickSlot(container.getScreenHandler().syncId, slot, 0, SlotActionType.QUICK_MOVE, client.player);
+                    timer = 5;
+                } else {
+                    client.player.closeHandledScreen();
+                    state = 0; timer = 12;
+                }
+            } else state = 0;
         }
     }
 
     private int findTargetItemSlot(MinecraftClient client) {
+        if (client.player == null) return -1;
         for (int i = 0; i < 36; i++) {
             if (isTargetItem(client.player.getInventory().getStack(i))) return i;
         }
