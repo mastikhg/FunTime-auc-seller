@@ -8,6 +8,7 @@ import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.component.DataComponentTypes;
@@ -31,304 +32,293 @@ import java.util.Random;
 import java.util.Set;
 
 public class InvisAuc implements ModInitializer {
-    private static KeyBinding startKey, guiKey;
-    private static boolean enabled = false;
+    private static KeyBinding startKey, guiKey, invisibilityKey;
+    private static boolean tradingEnabled = false;
+    private static boolean autoInvisibilityEnabled = false;
+
     private static int timer = 0, currentBatch = 0, state = 0;
-    private static int clickCounter = 0;
     private static int drinkingTicks = 0;
     private static final Random random = new Random();
 
-    private static int invisibilityCheckTimer = 0;
-    private static final int RECHECK_INTERVAL = 200; // Check every 10 seconds
-
-    private static final Set<BlockPos> ignoredBlocks = new HashSet<>();
-    private static BlockPos currentContainerPos = null;
-
+    private static int checkTimer = 0;
     private static final String PREFIX = "§8[§bIA§8]§r ";
+
     private static int currentPrice = 39000;
     private static int maxItems = 6;
     private static int sellAmount = 1;
     private static ItemStack targetStack = ItemStack.EMPTY;
-
-    public static void setCurrentPrice(int price) { currentPrice = price; }
-    public static int getCurrentPrice() { return currentPrice; }
-    public static void setMaxItems(int count) { maxItems = count; }
-    public static int getMaxItems() { return maxItems; }
-    public static void setSellAmount(int amount) { sellAmount = amount; }
-    public static int getSellAmount() { return sellAmount; }
-    public static ItemStack getTargetStack() { return targetStack; }
-    public static void setWaitTime(int ignored) {}
-    public static int getWaitTimeSeconds() { return 1; }
-
-    public static void setTargetStack(ItemStack stack) {
-        if (stack != null && !stack.isEmpty()) {
-            targetStack = stack.copy();
-            sendMessage("§aTarget updated!");
-        }
-    }
+    private static final Set<BlockPos> ignoredBlocks = new HashSet<>();
+    private static BlockPos currentContainerPos = null;
 
     @Override
     public void onInitialize() {
         startKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.start", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_O, "InvisAuc"));
         guiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.gui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_P, "InvisAuc"));
+        invisibilityKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.invisibility", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_I, "InvisAuc"));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            ClientPlayerEntity player = client.player;
-            if (player == null) return;
+            if (client.player == null) return;
             while (startKey.wasPressed()) {
-                enabled = !enabled;
-                state = 0; timer = 0; currentBatch = 0;
-                invisibilityCheckTimer = 0; // Trigger check immediately
-                ignoredBlocks.clear();
-                client.options.useKey.setPressed(false);
-                sendMessage(enabled ? "§aBot ON" : "§cBot OFF");
+                tradingEnabled = !tradingEnabled;
+                resetTrading();
+                sendMessage(tradingEnabled ? "§aBot ENABLED" : "§cBot DISABLED");
             }
-            while (guiKey.wasPressed()) client.setScreen(new TradeConfigScreen());
-            if (enabled) onTick(client);
+            while (invisibilityKey.wasPressed()) {
+                autoInvisibilityEnabled = !autoInvisibilityEnabled;
+                sendMessage(autoInvisibilityEnabled ? "§bAuto-Invis ON" : "§7Auto-Invis OFF");
+            }
+            if (guiKey.wasPressed()) client.setScreen(new TradeConfigScreen());
+            onTick(client);
         });
     }
 
+    private void resetTrading() { state = 0; timer = 0; currentBatch = 0; ignoredBlocks.clear(); }
+
     private void onTick(MinecraftClient client) {
         ClientPlayerEntity player = client.player;
-        if (player == null || client.interactionManager == null || client.getNetworkHandler() == null || client.world == null) return;
+        if (player == null || client.interactionManager == null || client.world == null) return;
 
-        // Smart Invisibility Check
-        if (state < 50) {
-            if (invisibilityCheckTimer <= 0) {
-                if (shouldDrinkInvisibility(player)) {
-                    useInvisibilityPotion(client);
-                    return;
-                }
-                invisibilityCheckTimer = RECHECK_INTERVAL;
-            } else {
-                invisibilityCheckTimer--;
-            }
+        if (autoInvisibilityEnabled && state < 50) {
+            if (checkTimer <= 0) {
+                if (shouldDrink(player)) { startDrinkingProcess(client); return; }
+                checkTimer = 100;
+            } else checkTimer--;
         }
 
         if (timer > 0) { timer--; return; }
 
         switch (state) {
-            case 0 -> processInventory(client);
+            case 0 -> { if (tradingEnabled) processInventory(client); }
             case 1 -> sliceStack(client);
             case 2 -> returnItems(client);
             case 3 -> executeSale(client);
+            case 4 -> mergeSmallStacks(client);
             case 10, 11 -> handleStorage(client);
             case 20 -> handleSearching(client);
-            case 50 -> {
-                client.options.useKey.setPressed(true);
-                drinkingTicks = 45;
-                state = 51;
-            }
-            case 51 -> {
-                if (drinkingTicks > 0) {
-                    drinkingTicks--;
-                    timer = 1;
-                } else {
-                    client.options.useKey.setPressed(false);
-                    dropEmptyBottles(client);
-                    invisibilityCheckTimer = RECHECK_INTERVAL;
-                    state = 0;
-                    timer = 20;
-                    sendMessage("§bPotion consumed!");
-                }
-            }
+            case 50, 51 -> handleDrinking(client);
         }
     }
 
-    private boolean shouldDrinkInvisibility(ClientPlayerEntity player) {
-        StatusEffectInstance effect = player.getStatusEffect(StatusEffects.INVISIBILITY);
-        if (effect == null) return true; // No effect - drink!
-        return effect.getDuration() < 4800; // Less than 4 minutes - drink!
-    }
-
-    private void useInvisibilityPotion(MinecraftClient client) {
-        var player = client.player;
-        var manager = client.interactionManager;
-        if (player == null || manager == null) return;
-
-        int potSlot = -1;
-        for (int i = 0; i < 36; i++) {
-            ItemStack stack = player.getInventory().getStack(i);
-            if (stack.isOf(Items.POTION)) {
-                var contents = stack.get(DataComponentTypes.POTION_CONTENTS);
-                if (contents != null && (contents.matches(Potions.LONG_INVISIBILITY) || contents.matches(Potions.INVISIBILITY))) {
-                    potSlot = i; break;
-                }
-            }
-        }
-
-        if (potSlot != -1) {
-            if (potSlot < 9) {
-                player.getInventory().selectedSlot = potSlot;
-                state = 50;
-                timer = 5;
-            } else {
-                manager.clickSlot(player.currentScreenHandler.syncId, potSlot, 8, SlotActionType.SWAP, player);
-                player.getInventory().selectedSlot = 8;
-                state = 50;
-                timer = 10;
-            }
-        } else {
-            invisibilityCheckTimer = 1200; // No potion found, check again in 1m
-            state = 0;
-        }
-    }
-
-    private void dropEmptyBottles(MinecraftClient client) {
-        var player = client.player;
-        var manager = client.interactionManager;
-        if (player == null || manager == null) return;
-
-        for (int i = 0; i < 36; i++) {
-            ItemStack stack = player.getInventory().getStack(i);
-            if (stack.isOf(Items.GLASS_BOTTLE)) {
-                int slot = i < 9 ? i + 36 : i;
-                manager.clickSlot(player.currentScreenHandler.syncId, slot, 1, SlotActionType.THROW, player);
-            }
-        }
-    }
-
-    // --- Standard Logic (Inventory/Sales/Storage) ---
     private void processInventory(MinecraftClient client) {
-        var handler = client.getNetworkHandler();
-        var manager = client.interactionManager;
         var player = client.player;
-        if (handler == null || manager == null || player == null) return;
+        var manager = client.interactionManager;
+        var network = client.getNetworkHandler();
+        if (player == null || manager == null || network == null) return;
 
         if (currentBatch >= maxItems) {
             currentBatch = 0;
-            handler.sendChatCommand("ah");
-            state = 10; timer = 15;
-            return;
+            network.sendChatCommand("ah");
+            state = 10; timer = 15; return;
         }
-        int slot = findTargetItemSlot(player);
+
+        int slot = -1;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = player.getInventory().getStack(i);
+            if (isTargetItem(stack) && stack.getCount() >= sellAmount) { slot = i; break; }
+        }
+
         if (slot != -1) {
-            manager.clickSlot(player.currentScreenHandler.syncId, slot < 9 ? slot + 36 : slot, 0, SlotActionType.PICKUP, player);
-            state = 1; timer = 5; clickCounter = 0;
-        } else {
-            state = 20; timer = 5;
-        }
+            int syncId = player.currentScreenHandler.syncId;
+            int serverSlot = slot < 9 ? slot + 36 : slot;
+
+            // INSTANT FULL STACK (64)
+            if (sellAmount == 64) {
+                manager.clickSlot(syncId, serverSlot, 0, SlotActionType.QUICK_MOVE, player);
+                state = 3; timer = 5;
+            } else {
+                manager.clickSlot(syncId, serverSlot, 0, SlotActionType.PICKUP, player);
+                state = 1; timer = 3;
+            }
+        } else state = 4;
     }
 
     private void sliceStack(MinecraftClient client) {
         var manager = client.interactionManager;
         var player = client.player;
         if (manager == null || player == null) return;
-        int button = (sellAmount > 1) ? 0 : 1;
-        manager.clickSlot(player.currentScreenHandler.syncId, 36, button, SlotActionType.PICKUP, player);
-        clickCounter++;
-        if (sellAmount <= 1 || clickCounter >= sellAmount) { state = 2; timer = 5; } else { timer = 2; }
+
+        int syncId = player.currentScreenHandler.syncId;
+        ItemStack inSlot = player.getInventory().getStack(0);
+        int current = inSlot.getCount();
+
+        if (current == sellAmount) { state = 2; timer = 3; return; }
+
+        ItemStack inCursor = player.currentScreenHandler.getCursorStack();
+        int inHand = inCursor.getCount();
+        int needed = sellAmount - current;
+
+        // SMART SLICE: If over 32, drop half (32) at once
+        if (sellAmount > 32 && current == 0 && inHand >= 32) {
+            manager.clickSlot(syncId, 36, 1, SlotActionType.PICKUP, player); // Right click puts half
+            timer = 4;
+        } else if (inHand > 0) {
+            manager.clickSlot(syncId, 36, 1, SlotActionType.PICKUP, player);
+            timer = 2;
+        } else state = 0;
     }
 
     private void returnItems(MinecraftClient client) {
         var manager = client.interactionManager;
         var player = client.player;
         if (manager == null || player == null) return;
-        int empty = player.getInventory().getEmptySlot();
-        int target = (empty != -1 ? (empty < 9 ? empty + 36 : empty) : 9);
-        manager.clickSlot(player.currentScreenHandler.syncId, target, 0, SlotActionType.PICKUP, player);
-        state = 3; timer = 6;
+
+        if (!player.currentScreenHandler.getCursorStack().isEmpty()) {
+            int empty = player.getInventory().getEmptySlot();
+            if (empty != -1) {
+                manager.clickSlot(player.currentScreenHandler.syncId, empty < 9 ? empty + 36 : empty, 0, SlotActionType.PICKUP, player);
+                timer = 5;
+            }
+        }
+        state = 3;
     }
 
     private void executeSale(MinecraftClient client) {
-        var handler = client.getNetworkHandler();
         var player = client.player;
-        if (handler == null || player == null) return;
-        player.getInventory().selectedSlot = 0;
-        handler.sendChatCommand("ah sell " + currentPrice);
-        currentBatch++; state = 0; timer = 25 + random.nextInt(10);
+        ClientPlayNetworkHandler network = client.getNetworkHandler();
+        if (player == null || network == null) return;
+
+        ItemStack target = player.getInventory().getStack(0);
+        if (isTargetItem(target) && target.getCount() == sellAmount) {
+            player.getInventory().selectedSlot = 0;
+            network.sendChatCommand("ah sell " + currentPrice);
+            currentBatch++;
+            sendMessage("§7Listed: §b" + currentBatch + "/" + maxItems + " §8(" + sellAmount + "x)");
+            state = 0; timer = 30 + random.nextInt(10);
+        } else state = 0;
     }
 
-    private void handleSearching(MinecraftClient client) {
+    private void mergeSmallStacks(MinecraftClient client) {
         var player = client.player;
         var manager = client.interactionManager;
         if (player == null || manager == null) return;
-        BlockPos containerPos = findNearbyContainer(client);
-        if (containerPos != null) {
-            currentContainerPos = containerPos;
-            BlockHitResult hit = new BlockHitResult(new Vec3d(containerPos.getX(), containerPos.getY(), containerPos.getZ()), Direction.UP, containerPos, false);
-            manager.interactBlock(player, Hand.MAIN_HAND, hit);
+
+        int first = -1, second = -1;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = player.getInventory().getStack(i);
+            if (isTargetItem(stack) && stack.getCount() < 64) {
+                if (first == -1) first = i; else { second = i; break; }
+            }
+        }
+        if (first != -1 && second != -1) {
+            int s1 = first < 9 ? first + 36 : first;
+            int s2 = second < 9 ? second + 36 : second;
+            manager.clickSlot(player.currentScreenHandler.syncId, s1, 0, SlotActionType.PICKUP, player);
+            manager.clickSlot(player.currentScreenHandler.syncId, s2, 0, SlotActionType.PICKUP, player);
+            manager.clickSlot(player.currentScreenHandler.syncId, s1, 0, SlotActionType.PICKUP, player);
+            timer = 8; state = 0;
+        } else state = 20;
+    }
+
+    private void handleSearching(MinecraftClient client) {
+        var manager = client.interactionManager;
+        var player = client.player;
+        if (player == null || manager == null) return;
+        BlockPos pos = findNearbyContainer(client);
+        if (pos != null) {
+            currentContainerPos = pos;
+            manager.interactBlock(player, Hand.MAIN_HAND, new BlockHitResult(new Vec3d(pos.getX()+0.5, pos.getY()+0.5, pos.getZ()+0.5), Direction.UP, pos, false));
             state = 11; timer = 15;
         } else {
-            sendMessage("§cNo containers found!");
-            enabled = false;
+            sendMessage("§c§l[!] All storages are empty. Stopping.");
+            tradingEnabled = false; state = 0;
         }
     }
 
     private BlockPos findNearbyContainer(MinecraftClient client) {
-        var player = client.player;
-        var world = client.world;
-        if (player == null || world == null) return null;
-        BlockPos playerPos = player.getBlockPos();
-        int r = 4;
-        for (int x = -r; x <= r; x++) {
-            for (int y = -r; y <= r; y++) {
-                for (int z = -r; z <= r; z++) {
-                    BlockPos pos = playerPos.add(x, y, z);
-                    if (!ignoredBlocks.contains(pos)) {
-                        var bState = world.getBlockState(pos);
-                        if (bState.isOf(Blocks.BARREL) || bState.isOf(Blocks.CHEST)) return pos;
-                    }
-                }
-            }
+        if (client.world == null || client.player == null) return null;
+        BlockPos p = client.player.getBlockPos();
+        for (int x = -4; x <= 4; x++) for (int y = -4; y <= 4; y++) for (int z = -4; z <= 4; z++) {
+            BlockPos pos = p.add(x, y, z);
+            if (!ignoredBlocks.contains(pos) && (client.world.getBlockState(pos).isOf(Blocks.BARREL) || client.world.getBlockState(pos).isOf(Blocks.CHEST))) return pos;
         }
         return null;
     }
 
     private void handleStorage(MinecraftClient client) {
-        var manager = client.interactionManager;
-        var player = client.player;
-        if (manager == null || player == null) return;
-        if (state == 10) {
-            if (client.currentScreen instanceof GenericContainerScreen container) {
-                manager.clickSlot(container.getScreenHandler().syncId, 46, 0, SlotActionType.PICKUP, player);
+        if (client.player == null || client.interactionManager == null) return;
+        if (client.currentScreen instanceof GenericContainerScreen container) {
+            var manager = client.interactionManager;
+            int syncId = container.getScreenHandler().syncId;
+            if (state == 10) {
+                manager.clickSlot(syncId, 46, 0, SlotActionType.PICKUP, client.player);
                 state = 11; timer = 10;
-            } else if (timer == 0) state = 0;
-        } else if (state == 11) {
-            if (client.currentScreen instanceof GenericContainerScreen container) {
+            } else {
                 int slot = findInMenu(container);
-                int invStart = container.getScreenHandler().slots.size() - 36;
-                if (slot != -1 && slot < invStart && player.getInventory().getEmptySlot() != -1) {
-                    manager.clickSlot(container.getScreenHandler().syncId, slot, 0, SlotActionType.QUICK_MOVE, player);
+                if (slot != -1 && client.player.getInventory().getEmptySlot() != -1) {
+                    manager.clickSlot(syncId, slot, 0, SlotActionType.QUICK_MOVE, client.player);
                     timer = 8;
                 } else {
-                    if (currentContainerPos != null) {
-                        ignoredBlocks.add(currentContainerPos);
-                        currentContainerPos = null;
-                    }
-                    player.closeHandledScreen();
-                    state = 0; timer = 12;
+                    if (currentContainerPos != null) ignoredBlocks.add(currentContainerPos);
+                    client.player.closeHandledScreen();
+                    state = 0; timer = 10;
                 }
-            } else if (timer == 0) state = 0;
-        }
-    }
-
-    private int findTargetItemSlot(ClientPlayerEntity player) {
-        for (int i = 0; i < 36; i++) {
-            if (isTargetItem(player.getInventory().getStack(i))) return i;
-        }
-        return -1;
+            }
+        } else if (timer == 0) state = 0;
     }
 
     private int findInMenu(GenericContainerScreen screen) {
-        for (int i = 0; i < screen.getScreenHandler().slots.size(); i++) {
+        for (int i = 0; i < screen.getScreenHandler().slots.size() - 36; i++) {
             if (isTargetItem(screen.getScreenHandler().getSlot(i).getStack())) return i;
         }
         return -1;
     }
 
-    private boolean isTargetItem(ItemStack stack) {
-        if (targetStack.isEmpty() || stack.isEmpty()) return false;
-        if (stack.getItem() != targetStack.getItem()) return false;
-        var c1 = stack.get(DataComponentTypes.POTION_CONTENTS);
+    private boolean isTargetItem(ItemStack s) {
+        if (targetStack.isEmpty() || s.isEmpty() || s.getItem() != targetStack.getItem()) return false;
+        var c1 = s.get(DataComponentTypes.POTION_CONTENTS);
         var c2 = targetStack.get(DataComponentTypes.POTION_CONTENTS);
         if (c1 != null && c2 != null) return Objects.equals(c1.potion(), c2.potion());
-        return stack.getName().getString().equals(targetStack.getName().getString());
+        return s.getName().getString().equals(targetStack.getName().getString());
     }
 
-    private static void sendMessage(String msg) {
-        if (MinecraftClient.getInstance().player != null) {
-            MinecraftClient.getInstance().player.sendMessage(Text.literal(PREFIX + msg), false);
+    private void handleDrinking(MinecraftClient client) {
+        if (client.player == null) return;
+        if (state == 50) { client.options.useKey.setPressed(true); drinkingTicks = 45; state = 51; }
+        else {
+            if (drinkingTicks > 0) { drinkingTicks--; timer = 1; }
+            else { client.options.useKey.setPressed(false); dropEmptyBottles(client); state = 0; timer = 10; }
         }
     }
+
+    private boolean shouldDrink(ClientPlayerEntity p) {
+        StatusEffectInstance e = p.getStatusEffect(StatusEffects.INVISIBILITY);
+        return e == null || e.getDuration() < 4800;
+    }
+
+    private void startDrinkingProcess(MinecraftClient client) {
+        if (client.player == null || client.interactionManager == null) return;
+        int potSlot = -1;
+        for (int i = 0; i < 36; i++) {
+            ItemStack s = client.player.getInventory().getStack(i);
+            if (s.isOf(Items.POTION)) {
+                var c = s.get(DataComponentTypes.POTION_CONTENTS);
+                if (c != null && (c.matches(Potions.LONG_INVISIBILITY) || c.matches(Potions.INVISIBILITY))) { potSlot = i; break; }
+            }
+        }
+        if (potSlot != -1) {
+            int syncId = client.player.currentScreenHandler.syncId;
+            if (potSlot < 9) client.player.getInventory().selectedSlot = potSlot;
+            else {
+                client.interactionManager.clickSlot(syncId, potSlot, 8, SlotActionType.SWAP, client.player);
+                client.player.getInventory().selectedSlot = 8;
+            }
+            state = 50; timer = 3;
+        }
+    }
+
+    private void dropEmptyBottles(MinecraftClient client) {
+        if (client.player == null || client.interactionManager == null) return;
+        for (int i = 0; i < 36; i++) if (client.player.getInventory().getStack(i).isOf(Items.GLASS_BOTTLE))
+            client.interactionManager.clickSlot(client.player.currentScreenHandler.syncId, i < 9 ? i + 36 : i, 1, SlotActionType.THROW, client.player);
+    }
+
+    public static void setCurrentPrice(int p) { currentPrice = p; }
+    public static int getCurrentPrice() { return currentPrice; }
+    public static void setMaxItems(int c) { maxItems = c; }
+    public static int getMaxItems() { return maxItems; }
+    public static void setSellAmount(int a) { sellAmount = a; }
+    public static int getSellAmount() { return sellAmount; }
+    public static ItemStack getTargetStack() { return targetStack; }
+    public static void setTargetStack(ItemStack s) { if (s != null && !s.isEmpty()) targetStack = s.copy(); }
+    private static void sendMessage(String m) { if (MinecraftClient.getInstance().player != null) MinecraftClient.getInstance().player.sendMessage(Text.literal(PREFIX + m), false); }
 }
