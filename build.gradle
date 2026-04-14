@@ -1,40 +1,34 @@
 plugins {
-    id 'fabric-loom' version '1.15-SNAPSHOT'
+    id 'fabric-loom' version '1.9-SNAPSHOT' // Оновлено для сумісності з новим Gradle
     id 'maven-publish'
 }
-version = project.mod_version
-group = project.maven_group
+
+version = "1.1-FT-1.21.4"
+group = "me.maxim.invisauc"
 
 base {
-    archivesName = project.archives_base_name
+    archivesName = "invis-potion-auto-auc"
 }
 
 repositories {
-    // Репозиторій для owo-lib
-    maven { url 'https://maven.wispforest.io/releases/' }
-    // Репозиторій для Fabric API та інших модів
-    maven { url 'https://maven.terraformersmc.com/' }
+    mavenCentral()
+    maven { url 'https://maven.wispforest.io/releases/' } // Для owo-lib
 }
 
 dependencies {
-    // Minecraft та Fabric Loader
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    minecraft "com.mojang:minecraft:1.21.4"
+    mappings "net.fabricmc:yarn:1.21.4+build.1:v2"
+    modImplementation "net.fabricmc:fabric-loader:0.16.7"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.110.0+1.21.4"
 
-    // Fabric API (необхідний для Networking та подій)
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-
-    // oωo-lib для твого GUI
-    // Версія 0.12.15+1.21 стабільна для 1.21.1
+    // owo-lib для крутого GUI
     modImplementation "io.wispforest:owo-lib:0.12.15+1.21"
-
-    // Включаємо бібліотеку в мод, щоб вона працювала у гравців без окремого встановлення
     include "io.wispforest:owo-lib:0.12.15+1.21"
 }
 
 processResources {
     inputs.property "version", project.version
+    filteringCharset "UTF-8"
 
     filesMatching("fabric.mod.json") {
         expand "version": project.version
@@ -47,7 +41,6 @@ tasks.withType(JavaCompile).configureEach {
 
 java {
     withSourcesJar()
-
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
 }
@@ -55,17 +48,5 @@ java {
 jar {
     from("LICENSE") {
         rename { "${it}_${project.archivesName}" }
-    }
-}
-
-publishing {
-    publications {
-        mavenJava(MavenPublication) {
-            from components.java
-        }
-    }
-
-    repositories {
-        // Тут можна налаштувати публікацію, якщо потрібно
     }
 }
