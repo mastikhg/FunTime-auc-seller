@@ -6,7 +6,13 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.DisconnectedScreen;
 import net.minecraft.client.gui.screen.GameMenuScreen;
+import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
+import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
+import net.minecraft.client.network.ServerAddress;
+import net.minecraft.client.network.ServerInfo;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.option.KeyBinding;
@@ -24,26 +30,37 @@ import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.Objects;
+import java.util.Random;
 
-@SuppressWarnings({"SpellCheckingInspection", "ConstantConditions"})
+@SuppressWarnings({"SpellCheckingInspection", "ConstantConditions", "unused"})
 public class InvisAuc implements ClientModInitializer {
-    private static KeyBinding startKey, guiKey, invisibilityKey, restockKey;
+    private static KeyBinding startKey, guiKey, invisibilityKey, restockKey, antiAfkToggleKey;
     private static boolean tradingEnabled = false;
     private static boolean autoInvisibilityEnabled = false;
     private static boolean manualRestockActive = false;
     private static boolean waitingForServer = false;
+    private static boolean autoReconnectEnabled = true;
+    private static boolean antiAfkEnabled = false;
 
     private static int timer = 0, currentBatch = 0, state = 0, pageCounter = 0;
-    private static int drinkingTicks = 0, watchdogTimer = 0, checkTimer = 0, reconnectTimer = 0, antiAfkTimer = 0;
+    private static int drinkingTicks = 0, watchdogTimer = 0, checkTimer = 0, reconnectTimer = 0;
+    private static int autoRetryTimer = 0;
+    private static int lobbyCheckTimer = 0;
+    private static int lobbyAfkTimer = 0;
+
+    private static int antiAfkTimer = 0;
+    private static int nextAntiAfkTarget = 1200;
+    private static final Random random = new Random();
 
     private static final String PREFIX = "§8[§bIA§8]§r ";
     private static final String ANARCHY_COMMAND = "an223";
+    private static ServerInfo lastServer;
 
     private static int currentPrice = 39000;
     private static int maxItems = 6;
     private static int sellAmount = 1;
     private static long maxBuyPrice = 1000000;
-    private static int requiredTotal = 256;
+    private static final int requiredTotal = 256;
     private static ItemStack targetStack = ItemStack.EMPTY;
 
     @Override
@@ -52,11 +69,12 @@ public class InvisAuc implements ClientModInitializer {
         guiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.gui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_P, "InvisAuc"));
         invisibilityKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.invisibility", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_I, "InvisAuc"));
         restockKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.restock", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_L, "InvisAuc"));
+        antiAfkToggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.antiafk", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K, "InvisAuc"));
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             String text = message.getString().toLowerCase();
             if (text.contains("restart") || text.contains("reboot") || text.contains("lobby")) {
-                waitingForServer = true; reconnectTimer = 200;
+                waitingForServer = true; reconnectTimer = 1200;
             }
             if (state >= 60 && (text.contains("insufficient") || text.contains("недостаточно"))) {
                 manualRestockActive = false;
@@ -66,28 +84,40 @@ public class InvisAuc implements ClientModInitializer {
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
+
+        StatsManager.startAutoSave();
     }
 
     private void onTick(MinecraftClient client) {
-        if (client.player == null || client.world == null) return;
+        if (client.world == null || client.player == null) {
+            if (tradingEnabled && autoReconnectEnabled) handleAutoReconnect(client);
+            return;
+        }
+
+        handleKeybindings(client);
+        handleAntiAfk(client);
+        handleLobbyLogic(client);
+
+        if (client.getCurrentServerEntry() != null) {
+            lastServer = client.getCurrentServerEntry();
+        }
+
         if (client.currentScreen instanceof TradeConfigScreen) return;
 
         if (waitingForServer) {
             if (reconnectTimer > 0) reconnectTimer--;
             else if (client.getNetworkHandler() != null) {
                 client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
-                reconnectTimer = 1200;
+                waitingForServer = false;
+                sendMessage("§aReturned to " + ANARCHY_COMMAND);
             }
         }
 
-        handleKeybindings(client);
         if (!tradingEnabled) return;
-
-        handleAntiAfk(client);
 
         if (state != 0) {
             watchdogTimer++;
-            if (watchdogTimer > 250) {
+            if (watchdogTimer > 350) {
                 resetTrading();
                 if (client.currentScreen != null) client.player.closeHandledScreen();
                 sendMessage("§eReset.");
@@ -118,6 +148,59 @@ public class InvisAuc implements ClientModInitializer {
         }
     }
 
+    private void handleLobbyLogic(MinecraftClient client) {
+        if (client.getNetworkHandler() == null) return;
+
+        boolean isInLobby = false;
+        if (client.getCurrentServerEntry() != null) {
+            String name = client.getCurrentServerEntry().name.toLowerCase();
+            String address = client.getCurrentServerEntry().address.toLowerCase();
+            if (name.contains("lobby") || name.contains("hub") || address.contains("lobby")) {
+                isInLobby = true;
+            }
+        }
+
+        if (isInLobby) {
+            lobbyCheckTimer++;
+            lobbyAfkTimer++;
+
+            if (antiAfkEnabled && lobbyAfkTimer >= (1200 + random.nextInt(1201))) {
+                double yawDelta = (random.nextBoolean() ? 1.0 : -1.0) * (0.1 + random.nextDouble() * 1.4);
+                client.player.changeLookDirection(yawDelta, 0.0);
+                if (client.getNetworkHandler() != null) {
+                    client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
+                }
+                lobbyAfkTimer = 0;
+            }
+
+            if (lobbyCheckTimer >= 1200) {
+                client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
+                sendMessage("§eChecking " + ANARCHY_COMMAND + "...");
+                lobbyCheckTimer = 0;
+            }
+        } else {
+            lobbyCheckTimer = 0;
+            lobbyAfkTimer = 0;
+        }
+    }
+
+    private void handleAutoReconnect(MinecraftClient client) {
+        if (client.currentScreen instanceof DisconnectedScreen) {
+            autoRetryTimer++;
+            if (autoRetryTimer >= 100) {
+                if (lastServer != null) {
+                    autoRetryTimer = 0;
+                    waitingForServer = true;
+                    reconnectTimer = 200;
+                    ConnectScreen.connect(new MultiplayerScreen(new TitleScreen()), client, ServerAddress.parse(lastServer.address), lastServer, false, null);
+                }
+            }
+        }
+    }
+
+    public static boolean isAutoReconnectEnabled() { return autoReconnectEnabled; }
+    public static void setAutoReconnectEnabled(boolean enabled) { autoReconnectEnabled = enabled; }
+
     private void handleKeybindings(MinecraftClient client) {
         while (startKey.wasPressed()) {
             setTradingEnabled(!tradingEnabled);
@@ -132,14 +215,29 @@ public class InvisAuc implements ClientModInitializer {
             autoInvisibilityEnabled = !autoInvisibilityEnabled;
             sendMessage(autoInvisibilityEnabled ? "§bAuto-Invis ON" : "§7Auto-Invis OFF");
         }
+        while (antiAfkToggleKey.wasPressed()) {
+            antiAfkEnabled = !antiAfkEnabled;
+            sendMessage(antiAfkEnabled ? "§aAnti-AFK ON" : "§7Anti-AFK OFF");
+        }
         if (guiKey.wasPressed()) client.setScreen(new TradeConfigScreen());
     }
 
     private void handleAntiAfk(MinecraftClient client) {
+        if (!antiAfkEnabled) return;
+
         antiAfkTimer++;
-        if (antiAfkTimer >= 1200) {
-            if (client.player.isOnGround()) client.player.jump();
+        if (antiAfkTimer >= nextAntiAfkTarget) {
+            double yawDelta = (random.nextBoolean() ? 1.0 : -1.0) * (0.1 + random.nextDouble() * 1.4);
+            double pitchDelta = (random.nextBoolean() ? 1.0 : -1.0) * (0.05 + random.nextDouble() * 0.45);
+
+            client.player.changeLookDirection(yawDelta, pitchDelta);
+
+            if (client.getNetworkHandler() != null) {
+                client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
+            }
+
             antiAfkTimer = 0;
+            nextAntiAfkTarget = 1200 + random.nextInt(1201);
         }
     }
 
@@ -184,38 +282,33 @@ public class InvisAuc implements ClientModInitializer {
         for (int i = 0; i < 45; i++) {
             ItemStack s = container.getScreenHandler().getSlot(i).getStack();
             int count = s.getCount();
-
             if (isTargetItem(s) && (count == 64 || count == 16)) {
                 if (isLongDuration(s)) {
                     long price = extractPrice(s);
                     long limit = (count == 64) ? maxBuyPrice : (maxBuyPrice / 4);
-
                     if (price <= limit) {
                         safeClick(client, i, 0, SlotActionType.QUICK_MOVE);
                         itemBought = true; timer = 20; pageCounter = 0;
                         sendMessage("§aBought " + count + " for §6" + price);
+
+                        StatsManager.addEarnings(-price);
+
                         break;
                     }
                 }
             }
         }
-
-        if (itemBought) {
-            state = 62;
-        } else {
-            handlePagination(client, container);
-        }
+        if (itemBought) state = 62;
+        else handlePagination(client, container);
     }
 
     private void handlePagination(MinecraftClient client, GenericContainerScreen container) {
         int nextButtonSlot = 51;
         if (container.getScreenHandler().slots.size() <= nextButtonSlot) return;
-
         ItemStack nav = container.getScreenHandler().getSlot(nextButtonSlot).getStack();
         if (pageCounter < 10 && !nav.isEmpty()) {
             safeClick(client, nextButtonSlot, 0, SlotActionType.PICKUP);
             pageCounter++; timer = 25;
-            sendMessage("§7Page " + (pageCounter + 1));
         } else {
             client.player.closeHandledScreen();
             state = 60; timer = 45; pageCounter = 0;
@@ -225,9 +318,7 @@ public class InvisAuc implements ClientModInitializer {
 
     private boolean isLongDuration(ItemStack s) {
         var lore = s.getTooltip(net.minecraft.item.Item.TooltipContext.DEFAULT, MinecraftClient.getInstance().player, TooltipType.BASIC);
-        for (Text line : lore) {
-            if (line.getString().contains("8:00")) return true;
-        }
+        for (Text line : lore) if (line.getString().contains("8:00")) return true;
         return false;
     }
 
@@ -270,15 +361,15 @@ public class InvisAuc implements ClientModInitializer {
                 found = true; timer = 8; break;
             }
         }
-        if (!found) {
-            client.player.closeHandledScreen();
-            currentBatch = 0; state = 0; timer = 10;
-        }
+        if (!found) { client.player.closeHandledScreen(); currentBatch = 0; state = 0; timer = 10; }
     }
 
     private void executeSale(MinecraftClient client) {
         if (client.getNetworkHandler() != null) {
             client.getNetworkHandler().sendChatCommand("ah sell " + currentPrice);
+
+            StatsManager.addEarnings(currentPrice);
+
             currentBatch++; timer = 25; state = 0;
         }
     }
@@ -305,10 +396,8 @@ public class InvisAuc implements ClientModInitializer {
             if (drinkingTicks > 0) { drinkingTicks--; timer = 1; }
             else {
                 client.options.useKey.setPressed(false);
-                for (int i = 0; i < 36; i++) {
-                    if (client.player.getInventory().getStack(i).isOf(Items.GLASS_BOTTLE))
-                        safeClick(client, i < 9 ? i + 36 : i, 1, SlotActionType.THROW);
-                }
+                for (int i = 0; i < 36; i++) if (client.player.getInventory().getStack(i).isOf(Items.GLASS_BOTTLE))
+                    safeClick(client, i < 9 ? i + 36 : i, 1, SlotActionType.THROW);
                 state = 0; timer = 8;
             }
         }
@@ -332,12 +421,18 @@ public class InvisAuc implements ClientModInitializer {
         return e == null || e.getDuration() < 1000;
     }
 
-    public static void setTradingEnabled(boolean enabled) {
-        tradingEnabled = enabled;
-        if (!enabled) resetTrading();
+    public static void setTradingEnabled(boolean enabled) { tradingEnabled = enabled; if (!enabled) resetTrading(); }
+
+    private static void resetTrading() {
+        state = 0;
+        timer = 0;
+        currentBatch = 0;
+        watchdogTimer = 0;
+        antiAfkTimer = 0;
+        pageCounter = 0;
+        nextAntiAfkTarget = 1200 + random.nextInt(1201);
     }
 
-    private static void resetTrading() { state = 0; timer = 0; currentBatch = 0; watchdogTimer = 0; antiAfkTimer = 0; pageCounter = 0; }
     private void sliceStack(MinecraftClient client) { safeClick(client, 36, 1, SlotActionType.PICKUP); state = 2; timer = 3; }
     private void returnItems(MinecraftClient client) { int empty = client.player.getInventory().getEmptySlot(); if (empty != -1) safeClick(client, empty < 9 ? empty + 36 : empty, 0, SlotActionType.PICKUP); state = 3; timer = 4; }
     private static void sendMessage(String m) { if (MinecraftClient.getInstance().player != null) MinecraftClient.getInstance().player.sendMessage(Text.literal(PREFIX + m), false); }
@@ -350,12 +445,6 @@ public class InvisAuc implements ClientModInitializer {
     public static int getSellAmount() { return sellAmount; }
     public static long getMaxBuyPrice() { return maxBuyPrice; }
     public static void setMaxBuyPrice(long p) { maxBuyPrice = p; }
-
-    @SuppressWarnings("unused")
-    public static void setRequiredTotal(int t) { requiredTotal = t; }
-    @SuppressWarnings("unused")
-    public static int getRequiredTotal() { return requiredTotal; }
-
     public static ItemStack getTargetStack() { return targetStack; }
     public static void setTargetStack(ItemStack s) { if (s != null && !s.isEmpty()) targetStack = s.copy(); }
 }
