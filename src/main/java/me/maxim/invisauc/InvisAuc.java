@@ -74,6 +74,9 @@ public class InvisAuc implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        // Завантажуємо збережений конфіг за допомогою нашого нового менеджера
+        ConfigManager.loadConfig();
+
         startKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.start", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_O, "InvisAuc"));
         guiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.gui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_P, "InvisAuc"));
         invisibilityKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.invisibility", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_I, "InvisAuc"));
@@ -99,8 +102,6 @@ public class InvisAuc implements ClientModInitializer {
     }
 
     private void onTick(MinecraftClient client) {
-        // 1. ГАРЯЧІ КЛАВІШІ ПЕРЕВІРЯЄМО НАЙПЕРШИМИ!
-        // Навіть якщо гравець у меню або світ ще завантажується, клік має зчитуватись і скидати тригер.
         if (client.player != null) {
             handleKeybindings(client);
         }
@@ -110,11 +111,9 @@ public class InvisAuc implements ClientModInitializer {
             return;
         }
 
-        // 2. Системи захисту та лобі (працюють незалежно від таймерів бота)
         handleAntiAfk(client);
         handleLobbyLogic(client);
 
-        // Опитування сайдбару раз на секунду (20 тіків)
         scoreboardCheckTimer++;
         if (scoreboardCheckTimer >= 20) {
             updateMoneyFromSidebar(client);
@@ -127,7 +126,6 @@ public class InvisAuc implements ClientModInitializer {
 
         if (client.currentScreen instanceof TradeConfigScreen) return;
 
-        // Логіка очікування повернення на анархію
         if (waitingForServer) {
             if (reconnectTimer > 0) reconnectTimer--;
             else if (client.getNetworkHandler() != null) {
@@ -137,10 +135,8 @@ public class InvisAuc implements ClientModInitializer {
             }
         }
 
-        // Якщо бот вимкнений — зупиняємо виконання тут
         if (!tradingEnabled) return;
 
-        // Захист від зависання інвентарю
         if (state != 0) {
             watchdogTimer++;
             if (watchdogTimer > 350) {
@@ -151,7 +147,6 @@ public class InvisAuc implements ClientModInitializer {
             }
         } else watchdogTimer = 0;
 
-        // Авто-інвіз
         if (autoInvisibilityEnabled && state < 50 && (client.currentScreen == null || client.currentScreen instanceof GameMenuScreen)) {
             if (checkTimer <= 0) {
                 if (shouldDrink(client.player)) { startDrinkingProcess(client); return; }
@@ -159,8 +154,6 @@ public class InvisAuc implements ClientModInitializer {
             } else checkTimer--;
         }
 
-        // 3. ТАЙМЕР ЗАТРИМОК РОБОТИ БОТА
-        // Тепер `return` тут НЕ блокує натискання клавіш, бо вони оброблені вище!
         if (timer > 0) { timer--; return; }
 
         switch (state) {
@@ -278,25 +271,29 @@ public class InvisAuc implements ClientModInitializer {
     }
 
     public static boolean isAutoReconnectEnabled() { return autoReconnectEnabled; }
-    public static void setAutoReconnectEnabled(boolean enabled) { autoReconnectEnabled = enabled; }
+    public static void setAutoReconnectEnabled(boolean enabled) { autoReconnectEnabled = enabled; ConfigManager.saveConfig(); }
 
     private void handleKeybindings(MinecraftClient client) {
         while (startKey.wasPressed()) {
             setTradingEnabled(!tradingEnabled);
             sendMessage(tradingEnabled ? "§aBot ENABLED" : "§cBot DISABLED");
+            ConfigManager.saveConfig();
         }
         while (restockKey.wasPressed()) {
             manualRestockActive = !manualRestockActive;
             if (manualRestockActive && tradingEnabled) { state = 60; pageCounter = 0; }
             sendMessage(manualRestockActive ? "§6Restock ON" : "§7Restock OFF");
+            ConfigManager.saveConfig();
         }
         while (invisibilityKey.wasPressed()) {
             autoInvisibilityEnabled = !autoInvisibilityEnabled;
             sendMessage(autoInvisibilityEnabled ? "§bAuto-Invis ON" : "§7Auto-Invis OFF");
+            ConfigManager.saveConfig();
         }
         while (antiAfkToggleKey.wasPressed()) {
             antiAfkEnabled = !antiAfkEnabled;
             sendMessage(antiAfkEnabled ? "§aAnti-AFK ON" : "§7Anti-AFK OFF");
+            ConfigManager.saveConfig();
         }
         if (guiKey.wasPressed()) client.setScreen(new TradeConfigScreen());
     }
@@ -517,14 +514,14 @@ public class InvisAuc implements ClientModInitializer {
     private void returnItems(MinecraftClient client) { int empty = client.player.getInventory().getEmptySlot(); if (empty != -1) safeClick(client, empty < 9 ? empty + 36 : empty, 0, SlotActionType.PICKUP); state = 3; timer = 4; }
     private static void sendMessage(String m) { if (MinecraftClient.getInstance().player != null) MinecraftClient.getInstance().player.sendMessage(Text.literal(PREFIX + m), false); }
 
-    public static void setCurrentPrice(int p) { currentPrice = p; }
+    public static void setCurrentPrice(int p) { currentPrice = p; ConfigManager.saveConfig(); }
     public static int getCurrentPrice() { return currentPrice; }
-    public static void setMaxItems(int c) { maxItems = c; }
+    public static void setMaxItems(int c) { maxItems = c; ConfigManager.saveConfig(); }
     public static int getMaxItems() { return maxItems; }
-    public static void setSellAmount(int a) { sellAmount = a; }
+    public static void setSellAmount(int a) { sellAmount = a; ConfigManager.saveConfig(); }
     public static int getSellAmount() { return sellAmount; }
     public static long getMaxBuyPrice() { return maxBuyPrice; }
-    public static void setMaxBuyPrice(long p) { maxBuyPrice = p; }
+    public static void setMaxBuyPrice(long p) { maxBuyPrice = p; ConfigManager.saveConfig(); }
     public static ItemStack getTargetStack() { return targetStack; }
-    public static void setTargetStack(ItemStack s) { if (s != null && !s.isEmpty()) targetStack = s.copy(); }
+    public static void setTargetStack(ItemStack s) { if (s != null && !s.isEmpty()) { targetStack = s.copy(); ConfigManager.saveConfig(); } }
 }

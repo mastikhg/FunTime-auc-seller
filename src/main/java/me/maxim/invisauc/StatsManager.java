@@ -27,7 +27,8 @@ public class StatsManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("InvisAuc-Stats");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    // Use dynamic paths so it saves inside your .minecraft folder safely
+    // НОВИЙ ЖОРСТКИЙ ШЛЯХ НА ДИСК C:
+    private static final String CONFIG_DIR = "C:\\MinecraftLogs";
     private static File STATS_DIR;
     private static File STATS_FILE;
     private static File LOG_FILE;
@@ -35,31 +36,51 @@ public class StatsManager {
     private static final DateTimeFormatter LOG_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DecimalFormat MONEY_FORMATTER;
 
+    // Додаємо змінні для сумісності з іншими частинами моду
+    private static long totalEarnings = 0;
+    private static long currentBalance = 0;
+
     static {
         DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
         symbols.setGroupingSeparator('.');
         MONEY_FORMATTER = new DecimalFormat("#,##0", symbols);
     }
 
-    // Call this to safely set up directories without triggering Windows permission blocks
+    // Ініціалізація файлів тепер цілить в C:\MinecraftLogs
     private static void initFiles() {
         if (STATS_DIR == null) {
-            // This safely gets your .minecraft folder (or custom launcher instance folder)
-            File gameDir = MinecraftClient.getInstance().runDirectory;
-            STATS_DIR = new File(gameDir, "logs/InvisAuc");
+            STATS_DIR = new File(CONFIG_DIR);
             STATS_FILE = new File(STATS_DIR, "global_stats.json");
             LOG_FILE = new File(STATS_DIR, "money_tracker.log");
         }
         if (!STATS_DIR.exists()) {
-            STATS_DIR.mkdirs();
+            if (!STATS_DIR.mkdirs()) {
+                LOGGER.error("Не вдалося створити папку C:\\MinecraftLogs");
+            }
         }
     }
 
     public static void startAutoSave() {}
-    public static void addEarnings(double amount) {}
+
+    /**
+     * Додає або віднімає заробіток (викликається з InvisAuc)
+     */
+    public static void addEarnings(long amount) {
+        totalEarnings += amount;
+        // Оскільки заробіток змінює баланс, оновлюємо і зберігаємо поточний стан
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (client.player != null) {
+            updateBalanceFromChat(currentBalance);
+        }
+    }
+
+    // Залишаємо старий метод для сумісності (якщо десь передається double)
+    public static void addEarnings(double amount) {
+        addEarnings((long) amount);
+    }
 
     public static void logMoneyToFile(String playerName, long money) {
-        initFiles(); // Ensure folders exist
+        initFiles(); // Перевіряємо папку на диску C:
 
         try (FileWriter fw = new FileWriter(LOG_FILE, true);
              PrintWriter pw = new PrintWriter(fw)) {
@@ -73,8 +94,12 @@ public class StatsManager {
         }
     }
 
+    /**
+     * Основний метод оновлення та збереження в global_stats.json на диску C:
+     */
     public static void updateBalanceFromChat(long actualMoney) {
-        initFiles(); // Ensure folders exist
+        currentBalance = actualMoney; // Оновлюємо внутрішню змінну
+        initFiles();
 
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player == null) return;
@@ -131,11 +156,31 @@ public class StatsManager {
             GSON.toJson(root, writer);
             LOGGER.info("[InvisAuc] JSON оновлено через сайдбар для {}: {}", currentBotName, actualMoney);
 
-            // Log it right after saving JSON successfully!
+            // Логування у файл money_tracker.log на диску C:
             logMoneyToFile(currentBotName, actualMoney);
 
         } catch (IOException e) {
             LOGGER.error("Помилка запису файлу статистики", e);
         }
+    }
+
+    // ==========================================
+    // ГЕТТЕРИ ТА СЕТТЕРИ ДЛЯ ВЗАЄМОДІЇ З МОДОМ
+    // ==========================================
+
+    public static long getCurrentBalance() {
+        return currentBalance;
+    }
+
+    public static void setCurrentBalance(long balance) {
+        currentBalance = balance;
+    }
+
+    public static long getTotalEarnings() {
+        return totalEarnings;
+    }
+
+    public static void setTotalEarnings(long earnings) {
+        totalEarnings = earnings;
     }
 }
