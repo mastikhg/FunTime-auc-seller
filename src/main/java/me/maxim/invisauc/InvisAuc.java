@@ -25,10 +25,16 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.item.tooltip.TooltipType;
 import net.minecraft.potion.Potions;
+import net.minecraft.scoreboard.Scoreboard;
+import net.minecraft.scoreboard.ScoreboardDisplaySlot;
+import net.minecraft.scoreboard.ScoreboardObjective;
+import net.minecraft.scoreboard.ScoreboardEntry;
+import net.minecraft.scoreboard.Team;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
+import java.util.Collection;
 import java.util.Objects;
 import java.util.Random;
 
@@ -47,6 +53,7 @@ public class InvisAuc implements ClientModInitializer {
     private static int autoRetryTimer = 0;
     private static int lobbyCheckTimer = 0;
     private static int lobbyAfkTimer = 0;
+    private static int scoreboardCheckTimer = 0;
 
     private static int antiAfkTimer = 0;
     private static int nextAntiAfkTarget = 1200;
@@ -63,6 +70,8 @@ public class InvisAuc implements ClientModInitializer {
     private static final int requiredTotal = 256;
     private static ItemStack targetStack = ItemStack.EMPTY;
 
+    private static long lastKnownMoney = -1;
+
     @Override
     public void onInitializeClient() {
         startKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.start", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_O, "InvisAuc"));
@@ -72,11 +81,14 @@ public class InvisAuc implements ClientModInitializer {
         antiAfkToggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.antiafk", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K, "InvisAuc"));
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
-            String text = message.getString().toLowerCase();
-            if (text.contains("restart") || text.contains("reboot") || text.contains("lobby")) {
-                waitingForServer = true; reconnectTimer = 1200;
+            if (message == null) return;
+            String lowerText = message.getString().toLowerCase();
+
+            if (lowerText.contains("restart") || lowerText.contains("reboot") || lowerText.contains("lobby")) {
+                waitingForServer = true;
+                reconnectTimer = 1200;
             }
-            if (state >= 60 && (text.contains("insufficient") || text.contains("недостаточно"))) {
+            if (state >= 60 && (lowerText.contains("insufficient") || lowerText.contains("недостаточно"))) {
                 manualRestockActive = false;
                 state = 0;
                 sendMessage("§cRestock DISABLED.");
@@ -84,19 +96,30 @@ public class InvisAuc implements ClientModInitializer {
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
-
-        StatsManager.startAutoSave();
     }
 
     private void onTick(MinecraftClient client) {
+        // 1. ГАРЯЧІ КЛАВІШІ ПЕРЕВІРЯЄМО НАЙПЕРШИМИ!
+        // Навіть якщо гравець у меню або світ ще завантажується, клік має зчитуватись і скидати тригер.
+        if (client.player != null) {
+            handleKeybindings(client);
+        }
+
         if (client.world == null || client.player == null) {
             if (tradingEnabled && autoReconnectEnabled) handleAutoReconnect(client);
             return;
         }
 
-        handleKeybindings(client);
+        // 2. Системи захисту та лобі (працюють незалежно від таймерів бота)
         handleAntiAfk(client);
         handleLobbyLogic(client);
+
+        // Опитування сайдбару раз на секунду (20 тіків)
+        scoreboardCheckTimer++;
+        if (scoreboardCheckTimer >= 20) {
+            updateMoneyFromSidebar(client);
+            scoreboardCheckTimer = 0;
+        }
 
         if (client.getCurrentServerEntry() != null) {
             lastServer = client.getCurrentServerEntry();
@@ -104,6 +127,7 @@ public class InvisAuc implements ClientModInitializer {
 
         if (client.currentScreen instanceof TradeConfigScreen) return;
 
+        // Логіка очікування повернення на анархію
         if (waitingForServer) {
             if (reconnectTimer > 0) reconnectTimer--;
             else if (client.getNetworkHandler() != null) {
@@ -113,8 +137,10 @@ public class InvisAuc implements ClientModInitializer {
             }
         }
 
+        // Якщо бот вимкнений — зупиняємо виконання тут
         if (!tradingEnabled) return;
 
+        // Захист від зависання інвентарю
         if (state != 0) {
             watchdogTimer++;
             if (watchdogTimer > 350) {
@@ -125,6 +151,7 @@ public class InvisAuc implements ClientModInitializer {
             }
         } else watchdogTimer = 0;
 
+        // Авто-інвіз
         if (autoInvisibilityEnabled && state < 50 && (client.currentScreen == null || client.currentScreen instanceof GameMenuScreen)) {
             if (checkTimer <= 0) {
                 if (shouldDrink(client.player)) { startDrinkingProcess(client); return; }
@@ -132,6 +159,8 @@ public class InvisAuc implements ClientModInitializer {
             } else checkTimer--;
         }
 
+        // 3. ТАЙМЕР ЗАТРИМОК РОБОТИ БОТА
+        // Тепер `return` тут НЕ блокує натискання клавіш, бо вони оброблені вище!
         if (timer > 0) { timer--; return; }
 
         switch (state) {
@@ -145,6 +174,56 @@ public class InvisAuc implements ClientModInitializer {
             case 60 -> startRestock(client);
             case 61 -> handleBuyingLogic(client);
             case 62 -> { if (client.currentScreen != null) client.player.closeHandledScreen(); state = 0; timer = 15; }
+        }
+    }
+
+    private void updateMoneyFromSidebar(MinecraftClient client) {
+        if (client.world == null) return;
+
+        Scoreboard scoreboard = client.world.getScoreboard();
+        ScoreboardObjective sidebarObjective = scoreboard.getObjectiveForSlot(ScoreboardDisplaySlot.SIDEBAR);
+        if (sidebarObjective == null) return;
+
+        Collection<ScoreboardEntry> entries = scoreboard.getScoreboardEntries(sidebarObjective);
+
+        for (ScoreboardEntry entry : entries) {
+            String owner = entry.owner();
+            Team team = scoreboard.getScoreHolderTeam(owner);
+
+            StringBuilder fullLine = new StringBuilder();
+
+            if (team != null) {
+                fullLine.append(team.getPrefix().getString());
+            }
+
+            if (entry.display() != null) {
+                fullLine.append(entry.display().getString());
+            } else {
+                fullLine.append(owner);
+            }
+
+            if (team != null) {
+                fullLine.append(team.getSuffix().getString());
+            }
+
+            String lineText = fullLine.toString();
+            if (lineText.isEmpty()) continue;
+
+            if (lineText.contains("Монет") || lineText.contains("Баланс") || lineText.contains("Money")) {
+                String cleanLine = lineText.replaceAll("§.", "").trim();
+                String digitsOnly = cleanLine.replaceAll("[^0-9]", "");
+
+                if (!digitsOnly.isEmpty()) {
+                    try {
+                        long currentMoneyOnScreen = Long.parseLong(digitsOnly);
+
+                        if (currentMoneyOnScreen != lastKnownMoney) {
+                            lastKnownMoney = currentMoneyOnScreen;
+                            StatsManager.updateBalanceFromChat(currentMoneyOnScreen);
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
         }
     }
 
@@ -430,6 +509,7 @@ public class InvisAuc implements ClientModInitializer {
         watchdogTimer = 0;
         antiAfkTimer = 0;
         pageCounter = 0;
+        lastKnownMoney = -1;
         nextAntiAfkTarget = 1200 + random.nextInt(1201);
     }
 
