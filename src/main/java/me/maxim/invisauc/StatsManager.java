@@ -34,7 +34,7 @@ public class StatsManager {
     static {
         DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
         symbols.setGroupingSeparator('.');
-        MONEY_FORMATTER = new DecimalFormat("#,##0", symbols);
+        MONEY_FORMATTER = new DecimalFormat("#,##0;-#,##0", symbols);
     }
 
     public static void startAutoSave() {
@@ -97,8 +97,13 @@ public class StatsManager {
             long currentMoney = 0;
             if (playerData.has("money")) {
                 try {
-                    String moneyStr = playerData.get("money").getAsString().replace(".", "");
+                    String moneyStr = playerData.get("money").getAsString();
+                    boolean isNegative = moneyStr.startsWith("-");
+                    moneyStr = moneyStr.replaceAll("[^0-9]", "");
                     currentMoney = Long.parseLong(moneyStr);
+                    if (isNegative) {
+                        currentMoney = -currentMoney;
+                    }
                 } catch (Exception ignored) {}
             }
             playerData.addProperty("money", MONEY_FORMATTER.format(currentMoney + sessionEarned));
