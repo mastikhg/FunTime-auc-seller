@@ -12,15 +12,12 @@ import java.io.FileWriter;
 import java.io.IOException;
 
 public class ConfigManager {
-    // Жорсткий шлях до нашої спільної папки на диску C:
+
     private static final String CONFIG_DIR = "C:\\MinecraftLogs";
     private static final File CONFIG_FILE = new File(CONFIG_DIR, "config.json");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    /**
-     * Викликається іншими класами (наприклад, при натисканні кнопок або закритті GUI).
-     * Зберігає налаштування та одночасно тригерить оновлення JSON статистики.
-     */
+
     public static void saveConfig() {
         try {
             File dir = new File(CONFIG_DIR);
@@ -28,7 +25,7 @@ public class ConfigManager {
                 System.err.println("[InvisAuc] Не вдалося створити папку C:\\MinecraftLogs");
             }
 
-            // 1. Зберігаємо стандартні налаштування моду (ціни, кількості тощо)
+
             JsonObject json = new JsonObject();
             json.addProperty("currentPrice", InvisAuc.getCurrentPrice());
             json.addProperty("maxItems", InvisAuc.getMaxItems());
@@ -40,7 +37,7 @@ public class ConfigManager {
                 GSON.toJson(json, writer);
             }
 
-            // 2. Оскільки баланс міг змінитися, примусово штовхаємо StatsManager оновити global_stats.json
+
             long currentMoney = StatsManager.getCurrentBalance();
             StatsManager.updateBalanceFromChat(currentMoney);
 
@@ -49,12 +46,7 @@ public class ConfigManager {
         }
     }
 
-    /**
-     * Викликається в InvisAuc.java при старті клієнта (в онІніціалізації).
-     * Завантажує налаштування моду та підтягує збережений баланс для поточного бота.
-     */
     public static void loadConfig() {
-        // Спочатку завантажуємо конфіг налаштувань
         if (CONFIG_FILE.exists()) {
             try (FileReader reader = new FileReader(CONFIG_FILE)) {
                 JsonObject json = GSON.fromJson(reader, JsonObject.class);
@@ -70,7 +62,7 @@ public class ConfigManager {
             }
         }
 
-        // Потім шукаємо в global_stats.json, чи є там вже збережений баланс для нашого нікнейма
+
         File statsFile = new File(CONFIG_DIR, "global_stats.json");
         MinecraftClient client = MinecraftClient.getInstance();
         if (statsFile.exists() && client.player != null) {

@@ -48,6 +48,8 @@ public class InvisAuc implements ClientModInitializer {
     private static boolean autoReconnectEnabled = true;
     private static boolean antiAfkEnabled = false;
 
+    private static boolean afkZoneActive = false;
+
     private static int timer = 0, currentBatch = 0, state = 0, pageCounter = 0;
     private static int drinkingTicks = 0, watchdogTimer = 0, checkTimer = 0, reconnectTimer = 0;
     private static int autoRetryTimer = 0;
@@ -55,8 +57,14 @@ public class InvisAuc implements ClientModInitializer {
     private static int lobbyAfkTimer = 0;
     private static int scoreboardCheckTimer = 0;
 
+    private static int walkTicksLeft = 0;
+
+    // Нові змінні для 5-секундного спаму команди
+    private static int commandSpamTicksLeft = 0;
+
+    // Фіксований запуск кожні 30 секунд (600 тіків)
     private static int antiAfkTimer = 0;
-    private static int nextAntiAfkTarget = 1200;
+    private static final int NEXT_ANTI_AFK_TARGET = 600;
     private static final Random random = new Random();
 
     private static final String PREFIX = "§8[§bIA§8]§r ";
@@ -74,7 +82,6 @@ public class InvisAuc implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        // Завантажуємо збережений конфіг за допомогою нашого нового менеджера
         ConfigManager.loadConfig();
 
         startKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.start", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_O, "InvisAuc"));
@@ -139,10 +146,15 @@ public class InvisAuc implements ClientModInitializer {
 
         if (state != 0) {
             watchdogTimer++;
-            if (watchdogTimer > 350) {
+            if (watchdogTimer > 400) {
                 resetTrading();
                 if (client.currentScreen != null) client.player.closeHandledScreen();
-                sendMessage("§eReset.");
+
+                if (antiAfkEnabled) {
+                    afkZoneActive = true;
+                    walkTicksLeft = 30;
+                }
+                sendMessage("§eChecking");
                 return;
             }
         } else watchdogTimer = 0;
@@ -184,20 +196,10 @@ public class InvisAuc implements ClientModInitializer {
             Team team = scoreboard.getScoreHolderTeam(owner);
 
             StringBuilder fullLine = new StringBuilder();
-
-            if (team != null) {
-                fullLine.append(team.getPrefix().getString());
-            }
-
-            if (entry.display() != null) {
-                fullLine.append(entry.display().getString());
-            } else {
-                fullLine.append(owner);
-            }
-
-            if (team != null) {
-                fullLine.append(team.getSuffix().getString());
-            }
+            if (team != null) fullLine.append(team.getPrefix().getString());
+            if (entry.display() != null) fullLine.append(entry.display().getString());
+            else fullLine.append(owner);
+            if (team != null) fullLine.append(team.getSuffix().getString());
 
             String lineText = fullLine.toString();
             if (lineText.isEmpty()) continue;
@@ -221,7 +223,57 @@ public class InvisAuc implements ClientModInitializer {
     }
 
     private void handleLobbyLogic(MinecraftClient client) {
-        if (client.getNetworkHandler() == null) return;
+        if (client.getNetworkHandler() == null || client.player == null) return;
+
+
+        boolean hasBlindness = false;
+        try {
+            for (StatusEffectInstance effect : client.player.getStatusEffects()) {
+                if (effect.getEffectType().equals(StatusEffects.BLINDNESS)) {
+                    hasBlindness = true;
+                    break;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (hasBlindness && antiAfkEnabled && !afkZoneActive) {
+            afkZoneActive = true;
+            walkTicksLeft = 35;
+        }
+
+
+        if (afkZoneActive && antiAfkEnabled) {
+            if (walkTicksLeft > 0) {
+                client.options.forwardKey.setPressed(true);
+                if (walkTicksLeft == 25) client.options.jumpKey.setPressed(true);
+                if (walkTicksLeft == 15) client.options.jumpKey.setPressed(false);
+                walkTicksLeft--;
+            } else {
+                client.options.forwardKey.setPressed(false);
+                afkZoneActive = false;
+
+
+                commandSpamTicksLeft = 100;
+                sendMessage("§6[Anti-AFK] Reconnect");
+            }
+            return;
+        }
+
+
+        if (commandSpamTicksLeft > 0 && antiAfkEnabled) {
+
+            if (commandSpamTicksLeft % 20 == 0) {
+                client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
+            }
+            commandSpamTicksLeft--;
+
+
+            if (hasBlindness) {
+                commandSpamTicksLeft = 0;
+            }
+            return;
+        }
+
 
         boolean isInLobby = false;
         if (client.getCurrentServerEntry() != null) {
@@ -233,10 +285,14 @@ public class InvisAuc implements ClientModInitializer {
         }
 
         if (isInLobby) {
+            if (lobbyCheckTimer == 0 || lobbyCheckTimer % 200 == 0) {
+                StatsManager.updateBalanceFromChat(StatsManager.getCurrentBalance());
+            }
+
             lobbyCheckTimer++;
             lobbyAfkTimer++;
 
-            if (antiAfkEnabled && lobbyAfkTimer >= (1200 + random.nextInt(1201))) {
+            if (antiAfkEnabled && lobbyAfkTimer >= NEXT_ANTI_AFK_TARGET) {
                 double yawDelta = (random.nextBoolean() ? 1.0 : -1.0) * (0.1 + random.nextDouble() * 1.4);
                 client.player.changeLookDirection(yawDelta, 0.0);
                 if (client.getNetworkHandler() != null) {
@@ -299,10 +355,25 @@ public class InvisAuc implements ClientModInitializer {
     }
 
     private void handleAntiAfk(MinecraftClient client) {
-        if (!antiAfkEnabled) return;
+        if (!antiAfkEnabled || client.player == null) return;
+
+        boolean hasBlindness = false;
+        try {
+            for (StatusEffectInstance effect : client.player.getStatusEffects()) {
+                if (effect.getEffectType().equals(StatusEffects.BLINDNESS)) {
+                    hasBlindness = true;
+                    break;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (hasBlindness) {
+            handleLobbyLogic(client);
+            return;
+        }
 
         antiAfkTimer++;
-        if (antiAfkTimer >= nextAntiAfkTarget) {
+        if (antiAfkTimer >= NEXT_ANTI_AFK_TARGET) {
             double yawDelta = (random.nextBoolean() ? 1.0 : -1.0) * (0.1 + random.nextDouble() * 1.4);
             double pitchDelta = (random.nextBoolean() ? 1.0 : -1.0) * (0.05 + random.nextDouble() * 0.45);
 
@@ -313,7 +384,6 @@ public class InvisAuc implements ClientModInitializer {
             }
 
             antiAfkTimer = 0;
-            nextAntiAfkTarget = 1200 + random.nextInt(1201);
         }
     }
 
@@ -366,9 +436,7 @@ public class InvisAuc implements ClientModInitializer {
                         safeClick(client, i, 0, SlotActionType.QUICK_MOVE);
                         itemBought = true; timer = 20; pageCounter = 0;
                         sendMessage("§aBought " + count + " for §6" + price);
-
                         StatsManager.addEarnings(-price);
-
                         break;
                     }
                 }
@@ -443,9 +511,7 @@ public class InvisAuc implements ClientModInitializer {
     private void executeSale(MinecraftClient client) {
         if (client.getNetworkHandler() != null) {
             client.getNetworkHandler().sendChatCommand("ah sell " + currentPrice);
-
             StatsManager.addEarnings(currentPrice);
-
             currentBatch++; timer = 25; state = 0;
         }
     }
@@ -507,7 +573,9 @@ public class InvisAuc implements ClientModInitializer {
         antiAfkTimer = 0;
         pageCounter = 0;
         lastKnownMoney = -1;
-        nextAntiAfkTarget = 1200 + random.nextInt(1201);
+        walkTicksLeft = 0;
+        afkZoneActive = false;
+        commandSpamTicksLeft = 0;
     }
 
     private void sliceStack(MinecraftClient client) { safeClick(client, 36, 1, SlotActionType.PICKUP); state = 2; timer = 3; }

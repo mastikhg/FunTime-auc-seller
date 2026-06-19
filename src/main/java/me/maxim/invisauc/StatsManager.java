@@ -11,13 +11,11 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
-import java.io.PrintWriter;
 import java.io.IOException;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.time.ZonedDateTime;
 import java.time.ZoneId;
-import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Map;
@@ -27,16 +25,15 @@ public class StatsManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("InvisAuc-Stats");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    // НОВИЙ ЖОРСТКИЙ ШЛЯХ НА ДИСК C:
     private static final String CONFIG_DIR = "C:\\MinecraftLogs";
     private static File STATS_DIR;
     private static File STATS_FILE;
-    private static File LOG_FILE;
 
-    private static final DateTimeFormatter LOG_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    // private static File LOG_FILE;
+
     private static final DecimalFormat MONEY_FORMATTER;
 
-    // Додаємо змінні для сумісності з іншими частинами моду
     private static long totalEarnings = 0;
     private static long currentBalance = 0;
 
@@ -46,12 +43,11 @@ public class StatsManager {
         MONEY_FORMATTER = new DecimalFormat("#,##0", symbols);
     }
 
-    // Ініціалізація файлів тепер цілить в C:\MinecraftLogs
     private static void initFiles() {
         if (STATS_DIR == null) {
             STATS_DIR = new File(CONFIG_DIR);
             STATS_FILE = new File(STATS_DIR, "global_stats.json");
-            LOG_FILE = new File(STATS_DIR, "money_tracker.log");
+            // LOG_FILE = new File(STATS_DIR, "money_tracker.log");
         }
         if (!STATS_DIR.exists()) {
             if (!STATS_DIR.mkdirs()) {
@@ -62,43 +58,34 @@ public class StatsManager {
 
     public static void startAutoSave() {}
 
-    /**
-     * Додає або віднімає заробіток (викликається з InvisAuc)
-     */
     public static void addEarnings(long amount) {
         totalEarnings += amount;
-        // Оскільки заробіток змінює баланс, оновлюємо і зберігаємо поточний стан
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) {
             updateBalanceFromChat(currentBalance);
         }
     }
 
-    // Залишаємо старий метод для сумісності (якщо десь передається double)
     public static void addEarnings(double amount) {
         addEarnings((long) amount);
     }
 
-    public static void logMoneyToFile(String playerName, long money) {
-        initFiles(); // Перевіряємо папку на диску C:
 
+    public static void logMoneyToFile(String playerName, long money) {
+        /* initFiles();
         try (FileWriter fw = new FileWriter(LOG_FILE, true);
              PrintWriter pw = new PrintWriter(fw)) {
-
             String timestamp = LocalDateTime.now().format(LOG_TIME_FORMAT);
             pw.println("[" + timestamp + "] Player " + playerName + " Money Updated: $" + MONEY_FORMATTER.format(money));
             LOGGER.info("Logged money to file for " + playerName + ": $" + money);
-
         } catch (IOException e) {
             LOGGER.error("Не вдалося записати в money_tracker.log!", e);
         }
+        */
     }
 
-    /**
-     * Основний метод оновлення та збереження в global_stats.json на диску C:
-     */
     public static void updateBalanceFromChat(long actualMoney) {
-        currentBalance = actualMoney; // Оновлюємо внутрішню змінну
+        currentBalance = actualMoney;
         initFiles();
 
         MinecraftClient client = MinecraftClient.getInstance();
@@ -156,31 +143,16 @@ public class StatsManager {
             GSON.toJson(root, writer);
             LOGGER.info("[InvisAuc] JSON оновлено через сайдбар для {}: {}", currentBotName, actualMoney);
 
-            // Логування у файл money_tracker.log на диску C:
-            logMoneyToFile(currentBotName, actualMoney);
+
+            // logMoneyToFile(currentBotName, actualMoney);
 
         } catch (IOException e) {
             LOGGER.error("Помилка запису файлу статистики", e);
         }
     }
 
-    // ==========================================
-    // ГЕТТЕРИ ТА СЕТТЕРИ ДЛЯ ВЗАЄМОДІЇ З МОДОМ
-    // ==========================================
-
-    public static long getCurrentBalance() {
-        return currentBalance;
-    }
-
-    public static void setCurrentBalance(long balance) {
-        currentBalance = balance;
-    }
-
-    public static long getTotalEarnings() {
-        return totalEarnings;
-    }
-
-    public static void setTotalEarnings(long earnings) {
-        totalEarnings = earnings;
-    }
+    public static long getCurrentBalance() { return currentBalance; }
+    public static void setCurrentBalance(long balance) { currentBalance = balance; }
+    public static long getTotalEarnings() { return totalEarnings; }
+    public static void setTotalEarnings(long earnings) { totalEarnings = earnings; }
 }
