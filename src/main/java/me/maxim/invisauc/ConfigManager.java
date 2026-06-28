@@ -25,7 +25,6 @@ public class ConfigManager {
                 System.err.println("[InvisAuc] Не вдалося створити папку C:\\MinecraftLogs");
             }
 
-
             JsonObject json = new JsonObject();
             json.addProperty("currentPrice", InvisAuc.getCurrentPrice());
             json.addProperty("maxItems", InvisAuc.getMaxItems());
@@ -33,10 +32,12 @@ public class ConfigManager {
             json.addProperty("maxBuyPrice", InvisAuc.getMaxBuyPrice());
             json.addProperty("autoReconnect", InvisAuc.isAutoReconnectEnabled());
 
+            // Зберігаємо тільки нікнейм
+            json.addProperty("payTarget", InvisAuc.getPayTarget());
+
             try (FileWriter writer = new FileWriter(CONFIG_FILE)) {
                 GSON.toJson(json, writer);
             }
-
 
             long currentMoney = StatsManager.getCurrentBalance();
             StatsManager.updateBalanceFromChat(currentMoney);
@@ -56,12 +57,14 @@ public class ConfigManager {
                     if (json.has("sellAmount")) InvisAuc.setSellAmount(json.get("sellAmount").getAsInt());
                     if (json.has("maxBuyPrice")) InvisAuc.setMaxBuyPrice(json.get("maxBuyPrice").getAsLong());
                     if (json.has("autoReconnect")) InvisAuc.setAutoReconnectEnabled(json.get("autoReconnect").getAsBoolean());
+
+                    // Завантажуємо тільки нікнейм
+                    if (json.has("payTarget")) InvisAuc.setPayTarget(json.get("payTarget").getAsString());
                 }
             } catch (IOException e) {
                 System.err.println("[InvisAuc] Помилка завантаження конфігу: " + e.getMessage());
             }
         }
-
 
         File statsFile = new File(CONFIG_DIR, "global_stats.json");
         MinecraftClient client = MinecraftClient.getInstance();
@@ -72,7 +75,6 @@ public class ConfigManager {
                 if (element != null && element.isJsonObject()) {
                     JsonObject root = element.getAsJsonObject();
 
-                    // Перебираємо player_0, player_1 і т.д.
                     for (int i = 0; i < 10; i++) {
                         String key = "player_" + i;
                         if (root.has(key)) {

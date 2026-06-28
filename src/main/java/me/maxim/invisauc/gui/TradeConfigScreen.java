@@ -22,7 +22,7 @@ public class TradeConfigScreen extends BaseOwoScreen<FlowLayout> {
         rootComponent.surface(Surface.VANILLA_TRANSLUCENT);
         rootComponent.alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER);
 
-        FlowLayout window = Containers.verticalFlow(Sizing.fixed(200), Sizing.content());
+        FlowLayout window = Containers.verticalFlow(Sizing.fixed(210), Sizing.content());
         window.padding(Insets.of(12));
         window.surface(Surface.DARK_PANEL);
         window.alignment(HorizontalAlignment.CENTER, VerticalAlignment.CENTER);
@@ -90,6 +90,18 @@ public class TradeConfigScreen extends BaseOwoScreen<FlowLayout> {
             } catch (NumberFormatException ignored) {}
         });
         window.child(limitField.margins(Insets.bottom(10)));
+
+        window.child(Components.label(Text.literal("§6─── Auto Pay 95% (Key U) ───")).margins(Insets.vertical(6)));
+
+        window.child(Components.label(Text.of("Pay Target (Nickname):")));
+        var payTargetField = Components.textBox(Sizing.fill(90));
+        payTargetField.setText(InvisAuc.getPayTarget());
+        payTargetField.onChanged().subscribe(val -> {
+            if (val != null) {
+                InvisAuc.setPayTarget(val.trim());
+            }
+        });
+        window.child(payTargetField.margins(Insets.bottom(10)));
 
         rootComponent.child(window);
     }

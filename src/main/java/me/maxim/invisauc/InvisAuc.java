@@ -33,14 +33,13 @@ import net.minecraft.scoreboard.Team;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
-
 import java.util.Collection;
 import java.util.Objects;
 import java.util.Random;
 
 @SuppressWarnings({"SpellCheckingInspection", "ConstantConditions", "unused"})
 public class InvisAuc implements ClientModInitializer {
-    private static KeyBinding startKey, guiKey, invisibilityKey, restockKey, antiAfkToggleKey;
+    private static KeyBinding startKey, guiKey, invisibilityKey, restockKey, antiAfkToggleKey, payKey;
     private static boolean tradingEnabled = false;
     private static boolean autoInvisibilityEnabled = false;
     private static boolean manualRestockActive = false;
@@ -59,10 +58,8 @@ public class InvisAuc implements ClientModInitializer {
 
     private static int walkTicksLeft = 0;
 
-    // Нові змінні для 5-секундного спаму команди
     private static int commandSpamTicksLeft = 0;
 
-    // Фіксований запуск кожні 30 секунд (600 тіків)
     private static int antiAfkTimer = 0;
     private static final int NEXT_ANTI_AFK_TARGET = 600;
     private static final Random random = new Random();
@@ -78,6 +75,7 @@ public class InvisAuc implements ClientModInitializer {
     private static final int requiredTotal = 256;
     private static ItemStack targetStack = ItemStack.EMPTY;
 
+    private static String payTarget = "";
     private static long lastKnownMoney = -1;
 
     @Override
@@ -89,6 +87,8 @@ public class InvisAuc implements ClientModInitializer {
         invisibilityKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.invisibility", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_I, "InvisAuc"));
         restockKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.restock", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_L, "InvisAuc"));
         antiAfkToggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.antiafk", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K, "InvisAuc"));
+
+        payKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.invisauc.pay", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_U, "InvisAuc"));
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             if (message == null) return;
@@ -225,7 +225,6 @@ public class InvisAuc implements ClientModInitializer {
     private void handleLobbyLogic(MinecraftClient client) {
         if (client.getNetworkHandler() == null || client.player == null) return;
 
-
         boolean hasBlindness = false;
         try {
             for (StatusEffectInstance effect : client.player.getStatusEffects()) {
@@ -241,7 +240,6 @@ public class InvisAuc implements ClientModInitializer {
             walkTicksLeft = 35;
         }
 
-
         if (afkZoneActive && antiAfkEnabled) {
             if (walkTicksLeft > 0) {
                 client.options.forwardKey.setPressed(true);
@@ -252,28 +250,23 @@ public class InvisAuc implements ClientModInitializer {
                 client.options.forwardKey.setPressed(false);
                 afkZoneActive = false;
 
-
                 commandSpamTicksLeft = 100;
                 sendMessage("§6[Anti-AFK] Reconnect");
             }
             return;
         }
 
-
         if (commandSpamTicksLeft > 0 && antiAfkEnabled) {
-
             if (commandSpamTicksLeft % 20 == 0) {
                 client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
             }
             commandSpamTicksLeft--;
-
 
             if (hasBlindness) {
                 commandSpamTicksLeft = 0;
             }
             return;
         }
-
 
         boolean isInLobby = false;
         if (client.getCurrentServerEntry() != null) {
@@ -351,6 +344,31 @@ public class InvisAuc implements ClientModInitializer {
             sendMessage(antiAfkEnabled ? "§aAnti-AFK ON" : "§7Anti-AFK OFF");
             ConfigManager.saveConfig();
         }
+
+        while (payKey.wasPressed()) {
+            if (client.getNetworkHandler() != null && payTarget != null && !payTarget.isEmpty()) {
+                long currentBalance = StatsManager.getCurrentBalance();
+
+                if (currentBalance <= 0) {
+                    sendMessage("§c[PAY] Error! Your current balance is 0 or hasn't updated yet.");
+                    continue;
+                }
+
+                long amountToSend = (long) (currentBalance * 0.95);
+
+                if (amountToSend > 0) {
+                    String cmd = "pay " + payTarget + " " + amountToSend;
+                    client.getNetworkHandler().sendChatCommand(cmd);
+                    client.getNetworkHandler().sendChatCommand(cmd);
+                    sendMessage("§6[PAY] Balance: §e" + currentBalance + "§6. Sent 95% (§a" + amountToSend + "§6) to player §b" + payTarget);
+                } else {
+                    sendMessage("§c[PAY] Balance is too low for transfer.");
+                }
+            } else {
+                sendMessage("§c[PAY] Error! Enter the recipient's nickname in the GUI config (P) first.");
+            }
+        }
+
         if (guiKey.wasPressed()) client.setScreen(new TradeConfigScreen());
     }
 
@@ -592,4 +610,7 @@ public class InvisAuc implements ClientModInitializer {
     public static void setMaxBuyPrice(long p) { maxBuyPrice = p; ConfigManager.saveConfig(); }
     public static ItemStack getTargetStack() { return targetStack; }
     public static void setTargetStack(ItemStack s) { if (s != null && !s.isEmpty()) { targetStack = s.copy(); ConfigManager.saveConfig(); } }
+
+    public static String getPayTarget() { return payTarget; }
+    public static void setPayTarget(String target) { payTarget = target; ConfigManager.saveConfig(); }
 }
