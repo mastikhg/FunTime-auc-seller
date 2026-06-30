@@ -33,6 +33,7 @@ import net.minecraft.scoreboard.Team;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
+import java.time.LocalTime;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.Random;
@@ -92,6 +93,12 @@ public class InvisAuc implements ClientModInitializer {
 
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             if (message == null) return;
+
+            // Нічний режим: з 00:30 до 09:00 ігноруємо системні повідомлення рестарту
+            LocalTime now = LocalTime.now();
+            int minuteOfDay = now.getHour() * 60 + now.getMinute();
+            if (minuteOfDay >= 30 && minuteOfDay < 540 && tradingEnabled) return;
+
             String lowerText = message.getString().toLowerCase();
 
             if (lowerText.contains("restart") || lowerText.contains("reboot") || lowerText.contains("lobby")) {
@@ -116,6 +123,42 @@ public class InvisAuc implements ClientModInitializer {
         if (client.world == null || client.player == null) {
             if (tradingEnabled && autoReconnectEnabled) handleAutoReconnect(client);
             return;
+        }
+
+        if (tradingEnabled) {
+            LocalTime now = LocalTime.now();
+            int minuteOfDay = now.getHour() * 60 + now.getMinute();
+            boolean isNight = (minuteOfDay >= 30 && minuteOfDay < 540);
+
+            if (isNight) {
+                waitingForServer = false;
+                reconnectTimer = 0;
+
+                boolean isInLobby = isClientInLobby(client);
+                if (!isInLobby) {
+                    if (client.currentScreen != null) client.player.closeHandledScreen();
+                    if (client.getNetworkHandler() != null) {
+                        client.getNetworkHandler().sendChatCommand("lobby");
+                        sendMessage("§c[Night Mode] It's night! Going to lobby to sleep until 9:00 AM.");
+                    }
+                }
+                resetTrading();
+                return;
+            } else {
+                boolean isInLobby = isClientInLobby(client);
+                if (isInLobby && timer <= 0) {
+                    if (client.options.jumpKey.isPressed()) {
+                        client.options.jumpKey.setPressed(false);
+                        client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
+                        sendMessage("§a[Night Mode] Good morning! Waking up and returning to " + ANARCHY_COMMAND);
+                        timer = 200;
+                    } else {
+                        client.options.jumpKey.setPressed(true);
+                        timer = 20;
+                    }
+                    return;
+                }
+            }
         }
 
         handleAntiAfk(client);
@@ -180,6 +223,13 @@ public class InvisAuc implements ClientModInitializer {
             case 61 -> handleBuyingLogic(client);
             case 62 -> { if (client.currentScreen != null) client.player.closeHandledScreen(); state = 0; timer = 15; }
         }
+    }
+
+    private boolean isClientInLobby(MinecraftClient client) {
+        if (client.getCurrentServerEntry() == null) return false;
+        String name = client.getCurrentServerEntry().name.toLowerCase();
+        String address = client.getCurrentServerEntry().address.toLowerCase();
+        return name.contains("lobby") || name.contains("hub") || address.contains("lobby");
     }
 
     private void updateMoneyFromSidebar(MinecraftClient client) {
@@ -268,14 +318,7 @@ public class InvisAuc implements ClientModInitializer {
             return;
         }
 
-        boolean isInLobby = false;
-        if (client.getCurrentServerEntry() != null) {
-            String name = client.getCurrentServerEntry().name.toLowerCase();
-            String address = client.getCurrentServerEntry().address.toLowerCase();
-            if (name.contains("lobby") || name.contains("hub") || address.contains("lobby")) {
-                isInLobby = true;
-            }
-        }
+        boolean isInLobby = isClientInLobby(client);
 
         if (isInLobby) {
             if (lobbyCheckTimer == 0 || lobbyCheckTimer % 200 == 0) {
@@ -360,7 +403,7 @@ public class InvisAuc implements ClientModInitializer {
                     String cmd = "pay " + payTarget + " " + amountToSend;
                     client.getNetworkHandler().sendChatCommand(cmd);
                     client.getNetworkHandler().sendChatCommand(cmd);
-                    sendMessage("§6[PAY] Balance: §e" + currentBalance + "§6. Sent 95% (§a" + amountToSend + "§6) to player §b" + payTarget);
+                    sendMessage("§6[PAY] Balance updated. Sent 95% (§a" + amountToSend + "§6) to player §b" + payTarget);
                 } else {
                     sendMessage("§c[PAY] Balance is too low for transfer.");
                 }
