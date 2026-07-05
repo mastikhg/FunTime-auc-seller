@@ -57,7 +57,7 @@ public class InvisAuc implements ClientModInitializer {
     private static int lobbyAfkTimer = 0;
     private static int scoreboardCheckTimer = 0;
 
-    private static int walkTicksLeft = 0;
+    private static int jumpTicksLeft = 0;
 
     private static int commandSpamTicksLeft = 0;
 
@@ -79,6 +79,11 @@ public class InvisAuc implements ClientModInitializer {
     private static String payTarget = "";
     private static long lastKnownMoney = -1;
 
+    // Змінні часу для нічного режиму
+    private static int nightModeStartHour = 0;
+    private static int nightModeStartMinute = 30;
+    private static int nightModeEndHour = 9;
+
     @Override
     public void onInitializeClient() {
         ConfigManager.loadConfig();
@@ -94,10 +99,12 @@ public class InvisAuc implements ClientModInitializer {
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             if (message == null) return;
 
-            // Нічний режим: з 00:30 до 09:00 ігноруємо системні повідомлення рестарту
             LocalTime now = LocalTime.now();
             int minuteOfDay = now.getHour() * 60 + now.getMinute();
-            if (minuteOfDay >= 30 && minuteOfDay < 540 && tradingEnabled) return;
+            int startMinute = nightModeStartHour * 60 + nightModeStartMinute;
+            int endMinute = nightModeEndHour * 60;
+
+            if (minuteOfDay >= startMinute && minuteOfDay < endMinute && tradingEnabled) return;
 
             String lowerText = message.getString().toLowerCase();
 
@@ -128,7 +135,9 @@ public class InvisAuc implements ClientModInitializer {
         if (tradingEnabled) {
             LocalTime now = LocalTime.now();
             int minuteOfDay = now.getHour() * 60 + now.getMinute();
-            boolean isNight = (minuteOfDay >= 30 && minuteOfDay < 540);
+            int startMinute = nightModeStartHour * 60 + nightModeStartMinute;
+            int endMinute = nightModeEndHour * 60;
+            boolean isNight = (minuteOfDay >= startMinute && minuteOfDay < endMinute);
 
             if (isNight) {
                 waitingForServer = false;
@@ -139,7 +148,7 @@ public class InvisAuc implements ClientModInitializer {
                     if (client.currentScreen != null) client.player.closeHandledScreen();
                     if (client.getNetworkHandler() != null) {
                         client.getNetworkHandler().sendChatCommand("lobby");
-                        sendMessage("§c[Night Mode] It's night! Going to lobby to sleep until 9:00 AM.");
+                        sendMessage("§c[Night Mode] It's night! Going to lobby to sleep.");
                     }
                 }
                 resetTrading();
@@ -150,7 +159,7 @@ public class InvisAuc implements ClientModInitializer {
                     if (client.options.jumpKey.isPressed()) {
                         client.options.jumpKey.setPressed(false);
                         client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
-                        sendMessage("§a[Night Mode] Good morning! Waking up and returning to " + ANARCHY_COMMAND);
+                        sendMessage("§a[Night Mode] Good morning! Returning to " + ANARCHY_COMMAND);
                         timer = 200;
                     } else {
                         client.options.jumpKey.setPressed(true);
@@ -195,7 +204,7 @@ public class InvisAuc implements ClientModInitializer {
 
                 if (antiAfkEnabled) {
                     afkZoneActive = true;
-                    walkTicksLeft = 30;
+                    jumpTicksLeft = 30;
                 }
                 sendMessage("§eChecking");
                 return;
@@ -287,19 +296,16 @@ public class InvisAuc implements ClientModInitializer {
 
         if (hasBlindness && antiAfkEnabled && !afkZoneActive) {
             afkZoneActive = true;
-            walkTicksLeft = 35;
+            jumpTicksLeft = 35;
         }
 
         if (afkZoneActive && antiAfkEnabled) {
-            if (walkTicksLeft > 0) {
-                client.options.forwardKey.setPressed(true);
-                if (walkTicksLeft == 25) client.options.jumpKey.setPressed(true);
-                if (walkTicksLeft == 15) client.options.jumpKey.setPressed(false);
-                walkTicksLeft--;
+            if (jumpTicksLeft > 0) {
+                if (jumpTicksLeft == 30) client.options.jumpKey.setPressed(true);
+                if (jumpTicksLeft == 10) client.options.jumpKey.setPressed(false);
+                jumpTicksLeft--;
             } else {
-                client.options.forwardKey.setPressed(false);
                 afkZoneActive = false;
-
                 commandSpamTicksLeft = 100;
                 sendMessage("§6[Anti-AFK] Reconnect");
             }
@@ -634,7 +640,7 @@ public class InvisAuc implements ClientModInitializer {
         antiAfkTimer = 0;
         pageCounter = 0;
         lastKnownMoney = -1;
-        walkTicksLeft = 0;
+        jumpTicksLeft = 0;
         afkZoneActive = false;
         commandSpamTicksLeft = 0;
     }
@@ -656,4 +662,23 @@ public class InvisAuc implements ClientModInitializer {
 
     public static String getPayTarget() { return payTarget; }
     public static void setPayTarget(String target) { payTarget = target; ConfigManager.saveConfig(); }
+
+    // Геттери та сеттери для розширених налаштувань часу
+    public static int getNightModeStartHour() { return nightModeStartHour; }
+    public static void setNightModeStartHour(int hour) {
+        nightModeStartHour = Math.min(Math.max(hour, 0), 23);
+        ConfigManager.saveConfig();
+    }
+
+    public static int getNightModeStartMinute() { return nightModeStartMinute; }
+    public static void setNightModeStartMinute(int minute) {
+        nightModeStartMinute = Math.min(Math.max(minute, 0), 59);
+        ConfigManager.saveConfig();
+    }
+
+    public static int getNightModeEndHour() { return nightModeEndHour; }
+    public static void setNightModeEndHour(int hour) {
+        nightModeEndHour = Math.min(Math.max(hour, 0), 23);
+        ConfigManager.saveConfig();
+    }
 }
