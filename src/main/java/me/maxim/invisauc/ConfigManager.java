@@ -31,6 +31,7 @@ public class ConfigManager {
             json.addProperty("sellAmount", InvisAuc.getSellAmount());
             json.addProperty("maxBuyPrice", InvisAuc.getMaxBuyPrice());
             json.addProperty("autoReconnect", InvisAuc.isAutoReconnectEnabled());
+            json.addProperty("autoInvisibility", InvisAuc.isAutoInvisibilityEnabled());
 
             // Зберігаємо тільки нікнейм
             json.addProperty("payTarget", InvisAuc.getPayTarget());
@@ -57,6 +58,7 @@ public class ConfigManager {
                     if (json.has("sellAmount")) InvisAuc.setSellAmount(json.get("sellAmount").getAsInt());
                     if (json.has("maxBuyPrice")) InvisAuc.setMaxBuyPrice(json.get("maxBuyPrice").getAsLong());
                     if (json.has("autoReconnect")) InvisAuc.setAutoReconnectEnabled(json.get("autoReconnect").getAsBoolean());
+                    if (json.has("autoInvisibility")) InvisAuc.setAutoInvisibilityEnabled(json.get("autoInvisibility").getAsBoolean());
 
                     // Завантажуємо тільки нікнейм
                     if (json.has("payTarget")) InvisAuc.setPayTarget(json.get("payTarget").getAsString());
@@ -77,7 +79,7 @@ public class ConfigManager {
 
                     for (int i = 0; i < 10; i++) {
                         String key = "player_" + i;
-                        if (root.has(key)) {
+                        if (root.has(key) && root.get(key).isJsonObject()) {
                             JsonObject playerObj = root.getAsJsonObject(key);
                             if (playerObj.has("name") && playerObj.get("name").getAsString().equalsIgnoreCase(currentNickname)) {
                                 if (playerObj.has("money")) {

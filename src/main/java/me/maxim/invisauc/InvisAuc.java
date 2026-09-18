@@ -42,7 +42,7 @@ import java.util.Random;
 public class InvisAuc implements ClientModInitializer {
     private static KeyBinding startKey, guiKey, invisibilityKey, restockKey, antiAfkToggleKey, payKey;
     private static boolean tradingEnabled = false;
-    private static boolean autoInvisibilityEnabled = false;
+    private static boolean autoInvisibilityEnabled = true;
     private static boolean manualRestockActive = false;
     private static boolean waitingForServer = false;
     private static boolean autoReconnectEnabled = true;
@@ -99,12 +99,7 @@ public class InvisAuc implements ClientModInitializer {
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
             if (message == null) return;
 
-            LocalTime now = LocalTime.now();
-            int minuteOfDay = now.getHour() * 60 + now.getMinute();
-            int startMinute = nightModeStartHour * 60 + nightModeStartMinute;
-            int endMinute = nightModeEndHour * 60;
-
-            if (minuteOfDay >= startMinute && minuteOfDay < endMinute && tradingEnabled) return;
+            if (isNightTime() && tradingEnabled) return;
 
             String lowerText = message.getString().toLowerCase();
 
@@ -133,11 +128,7 @@ public class InvisAuc implements ClientModInitializer {
         }
 
         if (tradingEnabled) {
-            LocalTime now = LocalTime.now();
-            int minuteOfDay = now.getHour() * 60 + now.getMinute();
-            int startMinute = nightModeStartHour * 60 + nightModeStartMinute;
-            int endMinute = nightModeEndHour * 60;
-            boolean isNight = (minuteOfDay >= startMinute && minuteOfDay < endMinute);
+            boolean isNight = isNightTime();
 
             if (isNight) {
                 waitingForServer = false;
@@ -158,8 +149,10 @@ public class InvisAuc implements ClientModInitializer {
                 if (isInLobby && timer <= 0) {
                     if (client.options.jumpKey.isPressed()) {
                         client.options.jumpKey.setPressed(false);
-                        client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
-                        sendMessage("§a[Night Mode] Good morning! Returning to " + ANARCHY_COMMAND);
+                        if (client.getNetworkHandler() != null) {
+                            client.getNetworkHandler().sendChatCommand(ANARCHY_COMMAND);
+                            sendMessage("§a[Night Mode] Good morning! Returning to " + ANARCHY_COMMAND);
+                        }
                         timer = 200;
                     } else {
                         client.options.jumpKey.setPressed(true);
@@ -194,6 +187,23 @@ public class InvisAuc implements ClientModInitializer {
             }
         }
 
+        if (autoInvisibilityEnabled || tradingEnabled) {
+            if (state < 50 && (client.currentScreen == null || client.currentScreen instanceof GameMenuScreen)) {
+                if (checkTimer <= 0) {
+                    if (shouldDrink(client.player)) {
+                        startDrinkingProcess(client);
+                    }
+                    checkTimer = 60;
+                } else checkTimer--;
+            }
+
+            if (state == 50 || state == 51) {
+                if (timer > 0) { timer--; return; }
+                handleDrinking(client);
+                return;
+            }
+        }
+
         if (!tradingEnabled) return;
 
         if (state != 0) {
@@ -210,13 +220,6 @@ public class InvisAuc implements ClientModInitializer {
                 return;
             }
         } else watchdogTimer = 0;
-
-        if (autoInvisibilityEnabled && state < 50 && (client.currentScreen == null || client.currentScreen instanceof GameMenuScreen)) {
-            if (checkTimer <= 0) {
-                if (shouldDrink(client.player)) { startDrinkingProcess(client); return; }
-                checkTimer = 60;
-            } else checkTimer--;
-        }
 
         if (timer > 0) { timer--; return; }
 
@@ -385,6 +388,7 @@ public class InvisAuc implements ClientModInitializer {
         }
         while (invisibilityKey.wasPressed()) {
             autoInvisibilityEnabled = !autoInvisibilityEnabled;
+            if (autoInvisibilityEnabled) checkTimer = 0;
             sendMessage(autoInvisibilityEnabled ? "§bAuto-Invis ON" : "§7Auto-Invis OFF");
             ConfigManager.saveConfig();
         }
@@ -483,7 +487,8 @@ public class InvisAuc implements ClientModInitializer {
 
     private void startRestock(MinecraftClient client) {
         if (client.getNetworkHandler() != null) {
-            client.getNetworkHandler().sendChatCommand("ah search Зелье невидимости");
+            String searchName = (targetStack != null && !targetStack.isEmpty()) ? targetStack.getName().getString() : "Зелье невидимости";
+            client.getNetworkHandler().sendChatCommand("ah search " + searchName);
             state = 61; timer = 40;
         }
     }
@@ -584,29 +589,51 @@ public class InvisAuc implements ClientModInitializer {
     }
 
     private void startDrinkingProcess(MinecraftClient client) {
+        if (client.player == null) return;
         int potSlot = -1;
         for (int i = 0; i < 36; i++) {
             ItemStack s = client.player.getInventory().getStack(i);
             if (s.isOf(Items.POTION)) {
-                var c = s.get(DataComponentTypes.POTION_CONTENTS);
-                if (c != null && (c.matches(Potions.LONG_INVISIBILITY) || c.matches(Potions.INVISIBILITY))) { potSlot = i; break; }
+                PotionContentsComponent c = s.get(DataComponentTypes.POTION_CONTENTS);
+                if (c != null) {
+                    boolean isInvis = c.matches(Potions.LONG_INVISIBILITY) || c.matches(Potions.INVISIBILITY);
+                    if (!isInvis) {
+                        for (StatusEffectInstance effect : c.customEffects()) {
+                            if (effect.getEffectType().equals(StatusEffects.INVISIBILITY)) {
+                                isInvis = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (isInvis) { potSlot = i; break; }
+                }
             }
         }
         if (potSlot != -1) {
             if (potSlot < 9) client.player.getInventory().selectedSlot = potSlot;
             else { safeClick(client, potSlot, 8, SlotActionType.SWAP); client.player.getInventory().selectedSlot = 8; }
             state = 50; timer = 5;
+            sendMessage("§b[Auto-Invis] Drinking Invisibility Potion...");
         }
     }
 
     private void handleDrinking(MinecraftClient client) {
-        if (state == 50) { client.options.useKey.setPressed(true); drinkingTicks = 42; state = 51; }
-        else {
-            if (drinkingTicks > 0) { drinkingTicks--; timer = 1; }
-            else {
+        if (state == 50) {
+            client.options.useKey.setPressed(true);
+            drinkingTicks = 36;
+            state = 51;
+        } else if (state == 51) {
+            if (drinkingTicks > 0) {
+                client.options.useKey.setPressed(true);
+                drinkingTicks--;
+                timer = 1;
+            } else {
                 client.options.useKey.setPressed(false);
-                for (int i = 0; i < 36; i++) if (client.player.getInventory().getStack(i).isOf(Items.GLASS_BOTTLE))
-                    safeClick(client, i < 9 ? i + 36 : i, 1, SlotActionType.THROW);
+                for (int i = 0; i < 36; i++) {
+                    if (client.player != null && client.player.getInventory().getStack(i).isOf(Items.GLASS_BOTTLE)) {
+                        safeClick(client, i < 9 ? i + 36 : i, 1, SlotActionType.THROW);
+                    }
+                }
                 state = 0; timer = 8;
             }
         }
@@ -621,20 +648,37 @@ public class InvisAuc implements ClientModInitializer {
         if (targetStack.isEmpty() || s.isEmpty() || s.getItem() != targetStack.getItem()) return false;
         PotionContentsComponent c1 = s.get(DataComponentTypes.POTION_CONTENTS);
         PotionContentsComponent c2 = targetStack.get(DataComponentTypes.POTION_CONTENTS);
-        if (c1 != null && c2 != null) return Objects.equals(c1.potion(), c2.potion());
+        if (c1 != null || c2 != null) {
+            if (c1 == null || c2 == null) return false;
+            if (!Objects.equals(c1.potion(), c2.potion())) return false;
+        }
         return s.getName().getString().equals(targetStack.getName().getString());
     }
 
-    private boolean shouldDrink(ClientPlayerEntity p) {
-        StatusEffectInstance e = p.getStatusEffect(StatusEffects.INVISIBILITY);
-        return e == null || e.getDuration() < 1000;
+    private static boolean isNightTime() {
+        LocalTime now = LocalTime.now();
+        int minuteOfDay = now.getHour() * 60 + now.getMinute();
+        int startMinute = nightModeStartHour * 60 + nightModeStartMinute;
+        int endMinute = nightModeEndHour * 60;
+        if (startMinute <= endMinute) {
+            return minuteOfDay >= startMinute && minuteOfDay < endMinute;
+        } else {
+            return minuteOfDay >= startMinute || minuteOfDay < endMinute;
+        }
     }
 
-    public static void setTradingEnabled(boolean enabled) { tradingEnabled = enabled; if (!enabled) resetTrading(); }
+    private boolean shouldDrink(ClientPlayerEntity p) {
+        if (p == null || isClientInLobby(MinecraftClient.getInstance())) return false;
+        StatusEffectInstance e = p.getStatusEffect(StatusEffects.INVISIBILITY);
+        return e == null || e.getDuration() <= 1200;
+    }
+
+    public static void setTradingEnabled(boolean enabled) { tradingEnabled = enabled; resetTrading(); }
 
     private static void resetTrading() {
         state = 0;
         timer = 0;
+        checkTimer = 0;
         currentBatch = 0;
         watchdogTimer = 0;
         antiAfkTimer = 0;
@@ -659,6 +703,9 @@ public class InvisAuc implements ClientModInitializer {
     public static void setMaxBuyPrice(long p) { maxBuyPrice = p; ConfigManager.saveConfig(); }
     public static ItemStack getTargetStack() { return targetStack; }
     public static void setTargetStack(ItemStack s) { if (s != null && !s.isEmpty()) { targetStack = s.copy(); ConfigManager.saveConfig(); } }
+
+    public static boolean isAutoInvisibilityEnabled() { return autoInvisibilityEnabled; }
+    public static void setAutoInvisibilityEnabled(boolean enabled) { autoInvisibilityEnabled = enabled; if (enabled) checkTimer = 0; ConfigManager.saveConfig(); }
 
     public static String getPayTarget() { return payTarget; }
     public static void setPayTarget(String target) { payTarget = target; ConfigManager.saveConfig(); }

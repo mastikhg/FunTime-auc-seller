@@ -119,9 +119,11 @@ public class StatsManager {
                     if (index > maxIndex) maxIndex = index;
                 } catch (NumberFormatException ignored) {}
 
-                JsonObject playerObj = entry.getValue().getAsJsonObject();
-                if (playerObj.has("name") && playerObj.get("name").getAsString().equals(currentBotName)) {
-                    targetKey = key;
+                if (entry.getValue() != null && entry.getValue().isJsonObject()) {
+                    JsonObject playerObj = entry.getValue().getAsJsonObject();
+                    if (playerObj.has("name") && playerObj.get("name").getAsString().equals(currentBotName)) {
+                        targetKey = key;
+                    }
                 }
             }
         }
