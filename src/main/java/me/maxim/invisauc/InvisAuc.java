@@ -56,6 +56,7 @@ public class InvisAuc implements ClientModInitializer {
     private static int lobbyCheckTimer = 0;
     private static int lobbyAfkTimer = 0;
     private static int scoreboardCheckTimer = 0;
+    private static boolean wasUsingInvisPotion = false;
 
     private static int jumpTicksLeft = 0;
 
@@ -120,6 +121,7 @@ public class InvisAuc implements ClientModInitializer {
     private void onTick(MinecraftClient client) {
         if (client.player != null) {
             handleKeybindings(client);
+            handleManualInvisCheck(client);
         }
 
         if (client.world == null || client.player == null) {
@@ -588,26 +590,41 @@ public class InvisAuc implements ClientModInitializer {
         }
     }
 
+    private boolean isInvisibilityPotion(ItemStack s) {
+        if (s == null || s.isEmpty() || !s.isOf(Items.POTION)) return false;
+        PotionContentsComponent c = s.get(DataComponentTypes.POTION_CONTENTS);
+        if (c != null) {
+            if (c.matches(Potions.LONG_INVISIBILITY) || c.matches(Potions.INVISIBILITY)) {
+                return true;
+            }
+            for (StatusEffectInstance effect : c.customEffects()) {
+                if (effect.getEffectType().equals(StatusEffects.INVISIBILITY)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void handleManualInvisCheck(MinecraftClient client) {
+        if (client.player == null) return;
+        if (client.player.isUsingItem()) {
+            ItemStack activeItem = client.player.getActiveItem();
+            if (isInvisibilityPotion(activeItem)) {
+                wasUsingInvisPotion = true;
+            }
+        } else if (wasUsingInvisPotion) {
+            wasUsingInvisPotion = false;
+            client.player.getInventory().selectedSlot = 0;
+        }
+    }
+
     private void startDrinkingProcess(MinecraftClient client) {
         if (client.player == null) return;
         int potSlot = -1;
         for (int i = 0; i < 36; i++) {
             ItemStack s = client.player.getInventory().getStack(i);
-            if (s.isOf(Items.POTION)) {
-                PotionContentsComponent c = s.get(DataComponentTypes.POTION_CONTENTS);
-                if (c != null) {
-                    boolean isInvis = c.matches(Potions.LONG_INVISIBILITY) || c.matches(Potions.INVISIBILITY);
-                    if (!isInvis) {
-                        for (StatusEffectInstance effect : c.customEffects()) {
-                            if (effect.getEffectType().equals(StatusEffects.INVISIBILITY)) {
-                                isInvis = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (isInvis) { potSlot = i; break; }
-                }
-            }
+            if (isInvisibilityPotion(s)) { potSlot = i; break; }
         }
         if (potSlot != -1) {
             if (potSlot < 9) client.player.getInventory().selectedSlot = potSlot;
@@ -633,6 +650,9 @@ public class InvisAuc implements ClientModInitializer {
                     if (client.player != null && client.player.getInventory().getStack(i).isOf(Items.GLASS_BOTTLE)) {
                         safeClick(client, i < 9 ? i + 36 : i, 1, SlotActionType.THROW);
                     }
+                }
+                if (client.player != null) {
+                    client.player.getInventory().selectedSlot = 0;
                 }
                 state = 0; timer = 8;
             }
